@@ -1,0 +1,64 @@
+# Files changed or added in this Compy Level 2 fork, relative to wireguard_client_ynh 1.0.20210914~ynh1 (commit 51a1f342).
+
+CHANGES.txt
+    This list.
+
+README.md
+    Added the "Compy: one-page VPS gateway" section with the user flow, and a clear note that nothing here has been tested on a real YunoHost or VPS.
+
+manifest.toml
+    Kept id wireguard_client; bumped version to 1.0.20210914+compy1~ynh1 (the schema requires ~ynhN at the end, so ~ynh1+compy1 is not allowed); updated the description; added openssh-client to apt packages.
+
+config_panel.toml
+    Added the Public access (Compy) page and kept Advanced interfaces; this is the default live panel after a fresh install.
+
+conf/config_panel.template.toml
+    Same content as config_panel.toml, so regenerating the live panel on upgrade or interface changes keeps the [compy] page.
+
+conf/vps_setup.sh
+    New. Complete VPS setup script (WireGuard server, nftables DNAT+SNAT, idempotent, --uninstall). Copied to $install_dir by install and upgrade.
+
+scripts/_compy.sh
+    New. Getters, validators, run__* actions, and SSH/WireGuard helpers used by the Compy panel.
+
+scripts/_common.sh
+    Sources _compy.sh; adds init/install/regen/secure helpers; integrate_services now starts the Compy tunnel after restore even if compy_atboot was never set; uses nullglob so a missing conf is not treated as a literal glob.
+
+scripts/backup
+    Added a shellcheck directive only: app and install_dir are set by the YunoHost helpers. No backup behavior change.
+
+scripts/ports_from_yunohost.sh
+    New. Extracts the YunoHost firewall port list for the panel. Copied to $install_dir by install and upgrade. nounset is enabled only when the file is executed, not when it is sourced.
+
+scripts/config
+    Merges the Compy helpers (via _common.sh); fixes the undefined ${added_interfaces[@]} removal bug with a real set-difference; regenerates the panel from the template; refuses to add or delete the reserved 'compy' interface from Advanced interfaces; forces mode 600 on uploaded conf files.
+
+scripts/install
+    Initializes Compy settings, ships vps_setup.sh and ports_from_yunohost.sh into $install_dir, and creates the dedicated SSH key so the public key is visible in the panel after install.
+
+scripts/upgrade
+    Stops copying the live config_panel.toml over the package copy (that hid the new panel). Initializes missing Compy settings, ships the scripts, ensures the SSH key, chmods existing confs to 600, and regenerates the live panel from the template plus any extra interfaces.
+
+scripts/restore
+    Re-ships the current package scripts into $install_dir, chmods confs to 600, then integrate_services (which now also starts wireguard_client@compy when compy.conf exists).
+
+scripts/remove
+    Notes that the VPS side is not uninstalled automatically; uses nullglob when looping confs.
+
+doc/ADMIN.md
+    Points admins at the Public access page and states that this fork is untested on real hardware.
+
+doc/ADMIN_fr.md
+    French counterpart of the ADMIN.md note.
+
+doc/DESCRIPTION.md
+    Mentions the Compy VPS gateway and that it is untested.
+
+doc/DESCRIPTION_fr.md
+    French counterpart of the DESCRIPTION.md note.
+
+doc/POST_INSTALL.md
+    Tells the admin to open the Public access page; states that this fork is untested.
+
+doc/POST_INSTALL_fr.md
+    French counterpart of the POST_INSTALL.md note.

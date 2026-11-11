@@ -40,3 +40,28 @@ sudo yunohost app upgrade wireguard_client -u https://github.com/YunoHost-Apps/w
 ### 📚 App packaging documentation
 
 Please see <https://doc.yunohost.org/packaging_apps> for more information.
+
+## Compy: one-page VPS gateway
+
+This is an unofficial fork of `wireguard_client_ynh`. It adds a **Public access (Compy)** page to the app configuration panel. That page can turn a cheap Debian VPS into a public gateway for a home YunoHost server that has no public IP. The VPS runs only WireGuard and NAT; all HTTPS certificates stay on YunoHost.
+
+**This package has not been tested on a real YunoHost server or a real VPS.** Treat it as a starting point, not a production install.
+
+### User flow
+
+1. Install this app (or upgrade an existing `wireguard_client` install from this tree).
+2. Open the app configuration panel, **Public access (Compy)** page, and copy the SSH public key shown there.
+3. In the OVH (or other) panel, create a minimal Debian VPS and add that public key for the SSH user (often `debian` on OVH Debian images).
+4. Back in YunoHost, enter the VPS IP address or hostname (and the SSH user or port if they are not the defaults). Click **Test connection**, compare the fingerprint with the provider console, then click **Pin host key**.
+5. Review the port list (pre-filled from the YunoHost firewall) and press **Connect and set up the VPS**.
+6. Point the domain's DNS A record at the VPS IPv4 address. Do not publish an AAAA record in this version.
+
+Removing the app does not uninstall the VPS side. To tear the gateway down later, run the setup script on the VPS with `--uninstall` while you still have SSH access.
+
+You can install from this directory (or from a git URL of this tree) with:
+
+```
+sudo yunohost app install /path/to/this/directory
+```
+
+The Advanced interfaces page from upstream is still there, for uploading ordinary WireGuard client configs.
