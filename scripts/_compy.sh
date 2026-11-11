@@ -609,14 +609,14 @@ compy_start_and_verify() {
 compy_parse_result() {
     # Reads a captured script output file, sets COMPY_RESULT_* globals.
     local out_file="$1"
-    COMPY_RESULT_STATUS="$(awk -F= '/^COMPY_RESULT=/{print $2}' "$out_file" | tail -1)"
+    COMPY_RESULT_STATUS="$(awk -F= '/^COMPY_RESULT=/{sub(/^[^=]+=/,""); print}' "$out_file" | tail -1)"
     COMPY_RESULT_ERROR="$(awk -F= '/^COMPY_ERROR=/{sub(/^[^=]+=/,""); print}' "$out_file" | tail -1)"
-    COMPY_RESULT_PUBKEY="$(awk -F= '/^COMPY_SERVER_PUBKEY=/{print $2}' "$out_file" | tail -1)"
-    COMPY_RESULT_WG_PORT="$(awk -F= '/^COMPY_ENDPOINT_PORT=/{print $2}' "$out_file" | tail -1)"
-    COMPY_RESULT_SERVER_IP="$(awk -F= '/^COMPY_WG_SERVER_IP=/{print $2}' "$out_file" | tail -1)"
-    COMPY_RESULT_PEER_IP="$(awk -F= '/^COMPY_WG_PEER_IP=/{print $2}' "$out_file" | tail -1)"
-    COMPY_RESULT_SUBNET="$(awk -F= '/^COMPY_WG_SUBNET=/{print $2}' "$out_file" | tail -1)"
-    COMPY_RESULT_PUBLIC_IP="$(awk -F= '/^COMPY_PUBLIC_IP=/{print $2}' "$out_file" | tail -1)"
+    COMPY_RESULT_PUBKEY="$(awk -F= '/^COMPY_SERVER_PUBKEY=/{sub(/^[^=]+=/,""); print}' "$out_file" | tail -1)"
+    COMPY_RESULT_WG_PORT="$(awk -F= '/^COMPY_ENDPOINT_PORT=/{sub(/^[^=]+=/,""); print}' "$out_file" | tail -1)"
+    COMPY_RESULT_SERVER_IP="$(awk -F= '/^COMPY_WG_SERVER_IP=/{sub(/^[^=]+=/,""); print}' "$out_file" | tail -1)"
+    COMPY_RESULT_PEER_IP="$(awk -F= '/^COMPY_WG_PEER_IP=/{sub(/^[^=]+=/,""); print}' "$out_file" | tail -1)"
+    COMPY_RESULT_SUBNET="$(awk -F= '/^COMPY_WG_SUBNET=/{sub(/^[^=]+=/,""); print}' "$out_file" | tail -1)"
+    COMPY_RESULT_PUBLIC_IP="$(awk -F= '/^COMPY_PUBLIC_IP=/{sub(/^[^=]+=/,""); print}' "$out_file" | tail -1)"
 }
 
 compy_run_vps_setup() {
