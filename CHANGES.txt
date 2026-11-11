@@ -20,6 +20,11 @@ conf/vps_setup.sh
 
 scripts/_compy.sh
     New. Getters, validators, run__* actions, and SSH/WireGuard helpers used by the Compy panel.
+    get__compy_ports and get__compy_ssh_pubkey emit a quoted YAML `value:` (via
+    _compy_return_value). A raw `tcp:25,80;udp:` line is parsed as a mapping by
+    ynh_app_config_show, and YunoHost then crashes the panel with
+    ValueError: TextOption object has no field "tcp:25,80...;udp".
+    The stored port-list format itself is unchanged.
 
 scripts/_common.sh
     Sources _compy.sh; adds init/install/regen/secure helpers; integrate_services now starts the Compy tunnel after restore even if compy_atboot was never set; uses nullglob so a missing conf is not treated as a literal glob.
