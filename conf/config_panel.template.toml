@@ -49,7 +49,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         help = "Only use this if the current key was leaked or lost. You will have to replace the key on the VPS afterwards."
 
     [compy.vps]
-    name = "Step 2 — VPS connection (then click Save at the bottom of the page)"
+    name = "Step 2 — VPS address (click Save at the bottom of the page)"
 
         [compy.vps.compy_vps_host]
         ask = "VPS IP address or hostname"
@@ -73,7 +73,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         help = "This port is kept open on the VPS and is never forwarded to this home server."
 
     [compy.vpscheck]
-    name = "Step 2b — Check the VPS connection (click Save above first)"
+    name = "Step 2b — Check the VPS connection (Save the address above first)"
 
         [compy.vpscheck.compy_host_fingerprint]
         ask = "SSH host key is not pinned yet. Click Test connection."
@@ -96,7 +96,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         help = "Saves the fingerprint from the last test into this app's known_hosts file. Do this only after you have compared it with the OVH (or other) console."
 
     [compy.tunnel]
-    name = "Step 3 — Tunnel and ports"
+    name = "Step 3 — Tunnel and ports (click Save at the bottom of the page)"
 
         [compy.tunnel.compy_wg_port]
         ask = "WireGuard UDP port on the VPS"
