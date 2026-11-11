@@ -3,4 +3,4 @@ Il vise à être plus rapide, plus simple, plus léger et plus utile qu'IPsec. I
 
 Ce package inclut uniquement un panneau de configuration YunoHost pour charger des fichiers de configuration de WireGuard et pour créer les VPNs.
 
-Cette variante ajoute aussi une page Accès public (Compy) pour exposer le serveur via une VPS Debian bon marché (WireGuard et NAT uniquement). Elle n'a pas été testée sur un vrai serveur YunoHost ni sur une vraie VPS.
+Cette variante ajoute aussi une page Accès public (Compy) pour exposer le serveur via une VPS Debian bon marché (WireGuard et NAT uniquement). Après configuration, tout l'Internet IPv4 du serveur passe par la VPS, sauf les sous-réseaux locaux, et YunoHost voit l'IP publique de la VPS. Elle n'a pas été testée sur un vrai serveur YunoHost ni sur une vraie VPS.
