@@ -1,7 +1,177 @@
+# Config panel for wireguard_client (Compy fork).
+# Keep this file and conf/config_panel.template.toml in sync: the live panel
+# is regenerated from the template (plus conf/config_panel.part.toml for any
+# extra Advanced interfaces). Short keys must stay unique. Avoid reserved ids
+# (including `port`). type = "button" is forced to bind = "null"; handlers
+# are run__<id> in scripts/config.
+
 version = "1.0"
 
+# =====================================================================
+# Panel 1: Public access (Compy) — the grandma-friendly single page
+# =====================================================================
+[compy]
+name = "Public access (Compy)"
+
+    [compy.intro]
+    name = "How this works"
+
+        [compy.intro.compy_intro]
+        ask = """This page turns a cheap Debian VPS (for example an OVH VPS) into a public doorway for this YunoHost server, without opening any port on your home internet box.
+
+1. Copy the SSH public key below and add it in the OVH (or other) panel for the VPS, as an authorized key for the SSH user (often `debian` on OVH Debian images; root login may be disabled).
+2. Enter the VPS IP address, SSH user and SSH port. Click Test connection, compare the fingerprint with the one in the OVH console, then click Pin host key.
+3. Review the port list (pre-filled from this server's YunoHost firewall). These are the ports the VPS will forward to this server. SSH on the VPS is never forwarded.
+4. Click Connect and set up the VPS. This server will generate a WireGuard key, install WireGuard on the VPS over SSH, start the tunnel, and keep all HTTPS certificates on this YunoHost box.
+
+Your DNS A record for the domain must later point at the VPS IPv4 address. Do not publish an AAAA record in this version."""
+        type = "alert"
+        style = "info"
+        bind = "null"
+
+    [compy.sshkey]
+    name = "Step 1 — SSH key for the VPS"
+
+        [compy.sshkey.compy_ssh_pubkey]
+        ask = "This server's SSH public key (paste this into the VPS provider panel)"
+        type = "text"
+        readonly = true
+        bind = "null"
+        help = "An ed25519 key is created automatically in this app's install directory, readable only by root. It is used only to reach the VPS."
+
+        [compy.sshkey.compy_regen_ssh_key]
+        type = "button"
+        ask = "Regenerate the SSH key"
+        style = "danger"
+        icon = "refresh"
+        help = "Only use this if the current key was leaked or lost. You will have to replace the key on the VPS afterwards."
+
+    [compy.vps]
+    name = "Step 2 — VPS connection"
+
+        [compy.vps.compy_vps_host]
+        ask = "VPS IP address or hostname"
+        type = "string"
+        help = "Prefer the IPv4 address. This value also becomes the WireGuard Endpoint host."
+        optional = false
+
+        [compy.vps.compy_ssh_user]
+        ask = "SSH user on the VPS"
+        type = "string"
+        default = "debian"
+        help = "OVH Debian images typically use `debian` with passwordless sudo. Root login is often disabled. The user must be able to run `sudo -n` (no password) or be root."
+        optional = false
+
+        [compy.vps.compy_ssh_port]
+        ask = "SSH port on the VPS"
+        type = "number"
+        default = 22
+        min = 1
+        max = 65535
+        help = "This port is kept open on the VPS and is never forwarded to this home server."
+
+        [compy.vps.compy_host_fingerprint]
+        ask = "SSH host key is not pinned yet. Click Test connection."
+        type = "alert"
+        style = "warning"
+        bind = "null"
+
+        [compy.vps.compy_test_ssh]
+        type = "button"
+        ask = "Test connection"
+        style = "info"
+        icon = "plug"
+        help = "Fetches the VPS SSH fingerprint (ssh-keyscan) and, if the host is already pinned, tries a non-interactive login and sudo."
+        # enabled only sees this section's fields
+        enabled = "compy_vps_host && compy_ssh_user"
+
+        [compy.vps.compy_pin_host]
+        type = "button"
+        ask = "Pin host key"
+        style = "warning"
+        icon = "lock"
+        help = "Saves the fingerprint from the last test into this app's known_hosts file. Do this only after you have compared it with the OVH (or other) console."
+        enabled = "compy_vps_host"
+
+    [compy.tunnel]
+    name = "Step 3 — Tunnel and ports"
+
+        [compy.tunnel.compy_wg_port]
+        ask = "WireGuard UDP port on the VPS"
+        type = "number"
+        default = 51820
+        min = 1
+        max = 65535
+
+        [compy.tunnel.compy_wg_subnet]
+        ask = "WireGuard tunnel subnet"
+        type = "string"
+        default = "10.99.0.0/24"
+        help = "The VPS will be the first host (10.99.0.1) and this server the second (10.99.0.2). Choose a subnet that does not overlap your home LAN. Prefix must be between /16 and /30."
+        pattern.regexp = '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$'
+        pattern.error = "Use a CIDR like 10.99.0.0/24"
+
+        [compy.tunnel.compy_ports]
+        ask = "Ports the VPS should forward to this server"
+        type = "text"
+        help = """Format: tcp:25,80,443,587,993;udp:  — ranges like 8000-8010 are allowed. Prefill comes from this server's YunoHost firewall, minus the home SSH port and local-only UDP services (53, 1900, 5353, 55354). Edit freely before setup. Do not include the VPS SSH port or the WireGuard port; the setup script will refuse those."""
+        # default is filled by the getter when the saved setting is empty
+
+        [compy.tunnel.compy_ports_preview]
+        ask = "Port list preview will appear here."
+        type = "alert"
+        style = "info"
+        bind = "null"
+
+        [compy.tunnel.compy_reload_ports]
+        type = "button"
+        ask = "Reload ports from the YunoHost firewall"
+        style = "info"
+        icon = "refresh"
+
+    [compy.actions]
+    name = "Step 4 — Set up and status"
+
+        [compy.actions.compy_setup_vps]
+        type = "button"
+        ask = "Connect and set up the VPS"
+        style = "success"
+        icon = "rocket"
+        help = "Requires a pinned host key. Generates the local WireGuard key if needed, runs the setup script on the VPS over SSH, writes the client config, starts the tunnel, and checks the handshake."
+
+        [compy.actions.compy_resync_ports]
+        type = "button"
+        ask = "Re-sync ports (v1.1)"
+        style = "info"
+        icon = "exchange"
+        help = "Re-runs the VPS script with the current port list (idempotent). The tunnel itself is not rebuilt unless the peer key or subnet changed."
+
+        [compy.actions.compy_test_ports]
+        type = "button"
+        ask = "Test public ports"
+        style = "info"
+        icon = "stethoscope"
+        help = "Asks the YunoHost diagnosis service to probe the VPS public IP (the request is sent from the VPS, so the probe hits the gateway). Also pings the tunnel and shows the latest handshake. Official `yunohost diagnosis run ports` from this home box is not sufficient; see the report."
+
+        [compy.actions.compy_status]
+        ask = "The tunnel has not been set up yet."
+        type = "alert"
+        style = "info"
+        bind = "null"
+
+        [compy.actions.compy_dns_hint]
+        ask = """After the tunnel is up, point the domain's DNS A record at the VPS IPv4 address and wait for it to propagate. Do not publish an AAAA record in this version (IPv6 forwarding is not installed). If this box has IPv6, set YunoHost DNS exposure to IPv4 only so diagnosis and Let's Encrypt do not advertise a home IPv6 address. Outbound mail still leaves through your home ISP in v1; rDNS/PTR on the VPS only helps once outbound SMTP is also routed via the VPS (later version)."""
+        type = "alert"
+        style = "warning"
+        bind = "null"
+
+# =====================================================================
+# Panel 2: existing WireGuard Client interfaces (advanced / legacy)
+# The Compy tunnel (interface name `compy`) is managed by the Public
+# access page above; do not upload a file for it here.
+# =====================================================================
 [main]
-name = "Configuration"
+name = "Advanced interfaces"
 
     [main.status]
     name = "Status of the WireGuard client configurations"
@@ -17,12 +187,12 @@ name = "Configuration"
         [main.interfaces.interfaces]
         ask = "List of VPN clients to handle"
         type = "tags"
-        help = "Adding or removing clients in here will create or delete configuration files and network interfaces upon next Save (only alphanumerical characters and `_` are allowed)"
+        help = "Adding or removing names here will create or delete configuration files and network interfaces upon next Save (only alphanumerical characters and `_` are allowed). The Compy public-access tunnel is managed on the Public access page and should not be added here."
         pattern.regexp = '^[\w.]+'
-        pattern.error  = "Only alphanumerical characters and `_` are allowed"
+        pattern.error = "Only alphanumerical characters and `_` are allowed"
 
         [main.interfaces.alert]
         ask = """Be wary about the configuration files you upload here.
-              They may contain PostUp and PostDown instructions; these will be run as `root` by WireGuard, with no safeguards."""
+They may contain PostUp and PostDown instructions; these will be run as `root` by WireGuard, with no safeguards."""
         type = "alert"
         style = "warning"
