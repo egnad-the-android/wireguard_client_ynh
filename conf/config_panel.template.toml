@@ -49,7 +49,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         help = "Only use this if the current key was leaked or lost. You will have to replace the key on the VPS afterwards."
 
     [compy.vps]
-    name = "Step 2 — VPS connection"
+    name = "Step 2 — VPS connection (then click Save at the bottom of the page)"
 
         [compy.vps.compy_vps_host]
         ask = "VPS IP address or hostname"
@@ -72,28 +72,28 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         max = 65535
         help = "This port is kept open on the VPS and is never forwarded to this home server."
 
-        [compy.vps.compy_host_fingerprint]
+    [compy.vpscheck]
+    name = "Step 2b — Check the VPS connection (click Save above first)"
+
+        [compy.vpscheck.compy_host_fingerprint]
         ask = "SSH host key is not pinned yet. Click Test connection."
         type = "alert"
         style = "warning"
         bind = "null"
 
-        [compy.vps.compy_test_ssh]
+        [compy.vpscheck.compy_test_ssh]
         type = "button"
         ask = "Test connection"
         style = "info"
         icon = "plug"
         help = "Fetches the VPS SSH fingerprint (ssh-keyscan) and, if the host is already pinned, tries a non-interactive login and sudo."
-        # enabled only sees this section's fields
-        enabled = "compy_vps_host && compy_ssh_user"
 
-        [compy.vps.compy_pin_host]
+        [compy.vpscheck.compy_pin_host]
         type = "button"
         ask = "Pin host key"
         style = "warning"
         icon = "lock"
         help = "Saves the fingerprint from the last test into this app's known_hosts file. Do this only after you have compared it with the OVH (or other) console."
-        enabled = "compy_vps_host"
 
     [compy.tunnel]
     name = "Step 3 — Tunnel and ports"
@@ -131,7 +131,10 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         help = """Comma-separated IPv4 CIDRs that must not go through the VPS. The default is auto-detected connected subnets plus 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, and 100.64.0.0/10 (CGNAT, including typical Starlink WAN). The WireGuard endpoint is always pinned on the home WAN automatically. Edit, then Save, before you set up or start the tunnel. Do not add 0.0.0.0/0."""
         # default is filled by the getter when the saved setting is empty
 
-        [compy.tunnel.compy_reload_ports]
+    [compy.portsbtn]
+    name = "Step 3b — Port list helper"
+
+        [compy.portsbtn.compy_reload_ports]
         type = "button"
         ask = "Reload ports from the YunoHost firewall"
         style = "info"
