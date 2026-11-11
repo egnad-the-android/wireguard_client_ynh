@@ -1,4 +1,6 @@
 #!/bin/bash
+# shellcheck disable=SC2154
+# app and install_dir are set by the YunoHost helpers.
 
 #=================================================
 # IMPORT GENERIC HELPERS
@@ -12,10 +14,14 @@ source /usr/share/yunohost/helpers
 #=================================================
 ynh_script_progression "Ensuring downward compatibility..."
 
-# Making sure the current config panel is not being overidden by the upgrade
-# We copy the current over the temporary one deployed during the upgrade
-# It is being copied back over after the end of this upgrade script
-cp /etc/yunohost/apps/$app/config_panel.toml $YNH_APP_BASEDIR
+# Do not copy the live /etc/yunohost/apps/$app/config_panel.toml over the
+# package copy. That hid new panel pages (including [compy]) on upgrade.
+# Rebuild the live panel from the current template plus any extra interfaces.
+compy_init_settings
+compy_install_files
+compy_ensure_ssh_key
+compy_secure_conf_files
+compy_regen_config_panel
 
 #=================================================
 # REAPPLY SYSTEM CONFIGURATION

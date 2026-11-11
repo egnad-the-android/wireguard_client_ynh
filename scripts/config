@@ -1,4 +1,7 @@
 #!/bin/bash
+# shellcheck disable=SC2154
+# app, install_dir, interfaces, old, and changed are set by the
+# YunoHost helpers / config-panel framework.
 
 #=================================================
 # IMPORT GENERIC HELPERS
@@ -21,22 +24,22 @@ install_dir=$(ynh_app_setting_get --key=install_dir)
 
 get__status() {
     status() {
-        if wg | grep "interface: $(basename $file .conf)" -q; then
+        if wg | grep "interface: $(basename "$file" .conf)" -q; then
             echo "running"
         else
             echo "not running"
         fi
     }
     endpoint() {
-        endpoint=$(ynh_read_var_in_file --file=$1 --key=endpoint)
-        if [ -z $endpoint ]; then
+        endpoint=$(ynh_read_var_in_file --file="$1" --key=endpoint)
+        if [ -z "$endpoint" ]; then
             echo "unknown"
         else
-            echo $endpoint
+            echo "$endpoint"
         fi
     }
 
-    if [ -n "$(find $install_dir -name '*.conf' | head -1)" ];
+    if [ -n "$(find "$install_dir" -name '*.conf' | head -1)" ];
     then
     cat << EOF
 ask:
@@ -46,11 +49,14 @@ ask:
     | Interface | Status | At boot | Endpoint |
     | --------- | ------ | ------- | -------- |
 EOF
-    for file in $install_dir/*.conf ; do
-        echo "    | $(basename $file .conf) | $(status $file) | $(systemctl is-enabled wireguard_client@$(basename $file .conf)) | $(endpoint $file) |"
+    for file in "$install_dir"/*.conf ; do
+        echo "    | $(basename "$file" .conf) | $(status "$file") | $(systemctl is-enabled "wireguard_client@$(basename "$file" .conf)") | $(endpoint "$file") |"
     done
     fi
 }
+
+# Compy getters / validators / run__* actions are defined in scripts/_compy.sh
+# (sourced from _common.sh).
 
 #=================================================
 # SPECIFIC VALIDATORS FOR TOML SHORT KEYS
@@ -70,17 +76,74 @@ ynh_app_config_apply() {
     # GENERATE INTERFACE ARRAYS
     #=================================================
     # Convert comma-separated list into a Bash array
-    readarray -td, interfaces_array < <(echo $interfaces)
-    readarray -td, old_interfaces_array < <(echo ${old[interfaces]})
+    readarray -td, interfaces_array < <(printf '%s' "$interfaces")
+    readarray -td, old_interfaces_array < <(printf '%s' "${old[interfaces]}")
 
-    # https://stackoverflow.com/questions/2312762/compare-difference-of-two-arrays-in-bash
-    # Get added interfaces
-    added_interfaces_array=(`echo ${interfaces_array[@]} ${old_interfaces_array[@]} | tr ' ' '\n' | sort | uniq -u `)
-    removed_interfaces_array=(`echo ${old_interfaces_array[@]} ${added_interfaces[@]} | tr ' ' '\n' | sort | uniq -D | uniq `)
+    # Drop empty elements left by an empty setting or a trailing comma/newline
+    _compy_drop_empty() {
+        local -n _arr=$1
+        local -a _tmp=()
+        local _x
+        for _x in "${_arr[@]+"${_arr[@]}"}"; do
+            _x="${_x//[$'\t\r\n']/}"
+            [[ -n "$_x" ]] && _tmp+=("$_x")
+        done
+        _arr=("${_tmp[@]+"${_tmp[@]}"}")
+    }
+    _compy_drop_empty interfaces_array
+    _compy_drop_empty old_interfaces_array
 
-    ynh_print_info "Previous interfaces: ${old_interfaces_array[*]}"
-    ynh_print_info "Added interfaces: ${added_interfaces_array[*]}"
-    ynh_print_info "Removed interfaces: ${removed_interfaces_array[*]}"
+    # Added = in new but not in old; removed = in old but not in new.
+    # (The upstream typo used undefined ${added_interfaces[@]} and uniq -u
+    # on the union, which treated removals as additions.)
+    added_interfaces_array=()
+    removed_interfaces_array=()
+    local i o found
+    for i in "${interfaces_array[@]+"${interfaces_array[@]}"}"; do
+        found=0
+        for o in "${old_interfaces_array[@]+"${old_interfaces_array[@]}"}"; do
+            if [[ "$i" == "$o" ]]; then
+                found=1
+                break
+            fi
+        done
+        [[ $found -eq 0 ]] && added_interfaces_array+=("$i")
+    done
+    for o in "${old_interfaces_array[@]+"${old_interfaces_array[@]}"}"; do
+        found=0
+        for i in "${interfaces_array[@]+"${interfaces_array[@]}"}"; do
+            if [[ "$o" == "$i" ]]; then
+                found=1
+                break
+            fi
+        done
+        [[ $found -eq 0 ]] && removed_interfaces_array+=("$o")
+    done
+
+    # The Compy tunnel is managed by the Public access page. Do not create
+    # an upload widget for it, and never delete compy.conf from this list.
+    local -a _filtered=()
+    for i in "${added_interfaces_array[@]+"${added_interfaces_array[@]}"}"; do
+        if [[ "$i" == "compy" ]]; then
+            ynh_print_err "The 'compy' interface is managed by the Public access page and was not added under Advanced interfaces."
+            continue
+        fi
+        _filtered+=("$i")
+    done
+    added_interfaces_array=("${_filtered[@]+"${_filtered[@]}"}")
+    _filtered=()
+    for i in "${removed_interfaces_array[@]+"${removed_interfaces_array[@]}"}"; do
+        if [[ "$i" == "compy" ]]; then
+            ynh_print_err "Refusing to remove the 'compy' interface from Advanced interfaces; it is managed by the Public access page."
+            continue
+        fi
+        _filtered+=("$i")
+    done
+    removed_interfaces_array=("${_filtered[@]+"${_filtered[@]}"}")
+
+    ynh_print_info "Previous interfaces: ${old_interfaces_array[*]-}"
+    ynh_print_info "Added interfaces: ${added_interfaces_array[*]-}"
+    ynh_print_info "Removed interfaces: ${removed_interfaces_array[*]-}"
 
     if [ "${changed[interfaces]}" == "true" ];
     then
@@ -88,49 +151,41 @@ ynh_app_config_apply() {
     #=================================================
     # HANDLING NEW INTERFACES
     #=================================================
-    # Create temporary directory for config_panel generation
-    TEMP_CONFIGPANEL=$(mktemp -d)
-
     # For each new interface, store its settings
-    for i in ${added_interfaces_array[@]}
+    for i in "${added_interfaces_array[@]+"${added_interfaces_array[@]}"}"
     do
         i_atboot="${i}_atboot"
         i_conf="${i}_conf"
-        ynh_app_setting_set --key=$i_atboot --value=1
-        ynh_app_setting_set --key=$i_conf --value=""
+        ynh_app_setting_set --key="$i_atboot" --value=1
+        ynh_app_setting_set --key="$i_conf" --value=""
     done
 
-    # Generate the new config panel
-    cat ../conf/config_panel.template.toml > /etc/yunohost/apps/$app/config_panel.toml
-    for i in ${interfaces_array[@]}
-    do
-        ynh_config_add --template="config_panel.part.toml" --destination="$TEMP_CONFIGPANEL/config_panel.$i.toml"
-        ynh_delete_file_checksum "$TEMP_CONFIGPANEL/config_panel.$i.toml"
-    done
-    for file in "$TEMP_CONFIGPANEL"/*; do
-        cat $file >> /etc/yunohost/apps/$app/config_panel.toml || true
-    done
-    ynh_safe_rm $TEMP_CONFIGPANEL
+    # Generate the new config panel from the template (includes [compy])
+    # plus one part per Advanced interface.
+    compy_regen_config_panel
 
     #=================================================
     # HANDLING REMOVED INTERFACES
     #=================================================
-    for i in ${removed_interfaces_array[@]}
+    for i in "${removed_interfaces_array[@]+"${removed_interfaces_array[@]}"}"
     do
         i_atboot="${i}_atboot"
         i_conf="${i}_conf"
-        systemctl stop wireguard_client@$i.service
-        systemctl disable --quiet wireguard_client@$i.service
-        yunohost service remove wireguard_client@$i
-        ynh_safe_rm ${!i_conf}
-        ynh_app_setting_delete --key=$i_atboot
-        ynh_app_setting_delete --key=$i_conf
+        systemctl stop "wireguard_client@$i.service"
+        systemctl disable --quiet "wireguard_client@$i.service"
+        yunohost service remove "wireguard_client@$i"
+        ynh_safe_rm "${!i_conf}"
+        ynh_app_setting_delete --key="$i_atboot"
+        ynh_app_setting_delete --key="$i_conf"
     done
 
     fi
 
-    for i in ${old_interfaces_array[@]}
+    for i in "${old_interfaces_array[@]+"${old_interfaces_array[@]}"}"
     do
+    # Skip the Compy tunnel; its conf is written by the Public access actions.
+    [[ "$i" == "compy" ]] && continue
+
     i_atboot="${i}_atboot"
     i_conf="${i}_conf"
 
@@ -139,40 +194,43 @@ ynh_app_config_apply() {
     #=================================================
     if [ "${changed[$i_conf]}" == "true" ] && [ -f "$install_dir/$i.conf" ];
     then
+        # Uploaded confs run as root via wg-quick; keep them root-only.
+        chmod 600 "$install_dir/$i.conf"
+        chown root:root "$install_dir/$i.conf"
         # If the file has been changed, we need to bring the interface down and restart it
-        systemctl stop wireguard_client@$i.service
-        systemctl start wireguard_client@$i.service || true
+        systemctl stop "wireguard_client@$i.service"
+        systemctl start "wireguard_client@$i.service" || true
         # Enable VPN at boot if required
-        [ ${!i_atboot} -eq 1 ] && systemctl enable --quiet wireguard_client@$i.service
+        [ "${!i_atboot}" -eq 1 ] && systemctl enable --quiet "wireguard_client@$i.service"
         # Integrate service in YunoHost
-        yunohost service add wireguard_client@$i --description="WireGuard VPN Client $i" --test_status="wg | grep \"interface: $i\" -q"
+        yunohost service add "wireguard_client@$i" --description="WireGuard VPN Client $i" --test_status="wg | grep \"interface: $i\" -q"
     elif [ "${changed[$i_conf]}" == "true" ] && [ ! -f "$install_dir/$i.conf" ];
     then
-        systemctl disable --quiet --now wireguard_client@$i.service
+        systemctl disable --quiet --now "wireguard_client@$i.service"
         # If, somehow, the interface is still running,
         # at this point the configuration file is already removed by YunoHost core.
         # We could prevent that with a dedicated setter, but I don't think we can have catchall functions in Bash
         # So, let's dump the still running interface information, shut the interface off, and delete all relevant files.
         if wg | grep "^interface: $i$" -q; then
-            touch $install_dir/$i.conf
-            wg-quick save $install_dir/$i.conf
-            wg-quick down $install_dir/$i.conf
-            ynh_safe_rm $install_dir/$i.conf
+            touch "$install_dir/$i.conf"
+            wg-quick save "$install_dir/$i.conf"
+            wg-quick down "$install_dir/$i.conf"
+            ynh_safe_rm "$install_dir/$i.conf"
         fi
-        yunohost service remove wireguard_client@$i || true
+        yunohost service remove "wireguard_client@$i" || true
     fi
 
     #=================================================
     # HANDLING START AT BOOT CHANGES
     #=================================================
     # In the context of YunoHost config panels booleans, truthy is 1
-    if [ "${changed[$i_atboot]}" == "true" ] && [ ${!i_atboot} -eq 1 ];
+    if [ "${changed[$i_atboot]}" == "true" ] && [ "${!i_atboot}" -eq 1 ];
     then
-        systemctl enable --quiet wireguard_client@$i.service
+        systemctl enable --quiet "wireguard_client@$i.service"
         ynh_print_info "$i interface will automatically start upon server boot"
-    elif [ "${changed[$i_atboot]}" == "true" ] && [ ${!i_atboot} -eq 0 ];
+    elif [ "${changed[$i_atboot]}" == "true" ] && [ "${!i_atboot}" -eq 0 ];
     then
-        systemctl disable --quiet wireguard_client@$i.service
+        systemctl disable --quiet "wireguard_client@$i.service"
         ynh_print_info "$i interface will not automatically start upon server boot"
     fi
 

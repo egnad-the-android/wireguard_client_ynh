@@ -1,4 +1,6 @@
 #!/bin/bash
+# shellcheck disable=SC2154
+# app and install_dir are set by the YunoHost helpers.
 
 #=================================================
 # IMPORT GENERIC HELPERS
@@ -14,6 +16,10 @@ source /usr/share/yunohost/helpers
 ynh_script_progression "Restoring the data directory..."
 
 ynh_restore "$install_dir"
+
+# Re-ship the current package scripts in case the backup predates this fork
+compy_install_files
+compy_secure_conf_files
 
 #=================================================
 # RESTORE SYSTEM CONFIGURATION
