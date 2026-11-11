@@ -388,11 +388,19 @@ compy_run_vps_setup() {
 
 # ---------------------------- getters ----------------------------
 
+# Custom getters are captured by ynh_app_config_show as YAML under
+# "<option>:". A raw line such as "tcp:25,80,443;udp:" is parsed as a
+# mapping (the trailing colon) and YunoHost then does setattr(option, key, ...)
+# which raises: TextOption object has no field "tcp:25,80...;udp".
+# Always return a quoted `value:` so the core treats it as the option value.
+_compy_return_value() {
+    python3 -c 'import json,sys; sys.stdout.write("value: " + json.dumps(sys.argv[1]) + "\n")' "$1"
+}
+
+
 get__compy_ssh_pubkey() {
     compy_ensure_ssh_key
-    # Raw value. Protect yaml-sensitive chars just in case, though an
-    # OpenSSH pubkey line is usually plain.
-    printf '"%s"\n' "$(tr -d '\n' <"$COMPY_SSH_PUB")"
+    _compy_return_value "$(tr -d '\n' <"$COMPY_SSH_PUB")"
 }
 
 get__compy_host_fingerprint() {
@@ -430,7 +438,7 @@ get__compy_ports() {
         saved="$(compy_default_ports)"
         _compy_set compy_ports "$saved"
     fi
-    printf '%s\n' "$saved"
+    _compy_return_value "$saved"
 }
 
 get__compy_ports_preview() {
