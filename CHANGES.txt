@@ -4,54 +4,98 @@ CHANGES.txt
     This list.
 
 README.md
-    Added the "Compy: one-page VPS gateway" section with the user flow, and a clear note that nothing here has been tested on a real YunoHost or VPS.
+    Added the "Compy: one-page VPS gateway" section with the user flow, full-tunnel
+    behaviour (DynDNS, PTR/mail, Starlink/CGNAT, VPS as a single point of failure),
+    and a clear note that nothing here has been tested on a real YunoHost or VPS.
 
 manifest.toml
-    Kept id wireguard_client; bumped version to 1.0.20210914+compy1~ynh1 (the schema requires ~ynhN at the end, so ~ynh1+compy1 is not allowed); updated the description; added openssh-client to apt packages.
+    Kept id wireguard_client; bumped version to 1.0.20210914+compy2~ynh1 (the schema requires ~ynhN at the end); updated the description; added openssh-client and curl to apt packages.
 
 config_panel.toml
     Added the Public access (Compy) page and kept Advanced interfaces; this is the default live panel after a fresh install.
+    Documents full-tunnel IPv4, the bypass-network list, verify-then-commit setup,
+    emergency off / start buttons, automatic nohost.me DynDNS, and PTR for mail.
+    The old "outbound mail still leaves via the home ISP" note is removed.
 
 conf/config_panel.template.toml
     Same content as config_panel.toml, so regenerating the live panel on upgrade or interface changes keeps the [compy] page.
 
 conf/vps_setup.sh
-    New. Complete VPS setup script (WireGuard server, nftables DNAT+SNAT, idempotent, --uninstall). Copied to $install_dir by install and upgrade.
+    New. Complete VPS setup script (WireGuard server, nftables DNAT + outbound
+    MASQUERADE, idempotent, --uninstall). Inbound SNAT of DNATed traffic is the default (so a split-tunnel client
+    still works) and is turned off with --no-dnat-snat only after the home
+    full tunnel is verified, so YunoHost can see real client IPs. Forward/input policy is drop; MSS clamped to 1380;
+    WG MTU 1420; emits COMPY_PUBLIC_IP. Copied to $install_dir by install and upgrade.
+
+conf/compy-watchdog.service
+    New. Oneshot unit that runs scripts/compy_watchdog.sh.
+
+conf/compy-watchdog.timer
+    New. Runs the watchdog every minute (enabled only after a verified tunnel).
 
 scripts/_compy.sh
     New. Getters, validators, run__* actions, and SSH/WireGuard helpers used by the Compy panel.
-    get__compy_ports and get__compy_ssh_pubkey emit a quoted YAML `value:` (via
-    _compy_return_value). A raw `tcp:25,80;udp:` line is parsed as a mapping by
-    ynh_app_config_show, and YunoHost then crashes the panel with
-    ValueError: TextOption object has no field "tcp:25,80...;udp".
+    get__compy_ports, get__compy_ssh_pubkey, and get__compy_bypass_nets emit a
+    quoted YAML `value:` (via _compy_return_value). A raw `tcp:25,80;udp:` line
+    is parsed as a mapping by ynh_app_config_show, and YunoHost then crashes
+    the panel with ValueError: TextOption object has no field "tcp:25,80...;udp".
     The stored port-list format itself is unchanged.
+    Client configs are full-tunnel IPv4 (AllowedIPs=0.0.0.0/0, wg-quick Table=auto,
+    PersistentKeepalive=25, MTU 1420, no DNS=). Setup and Start use
+    verify-then-commit (handshake, tunnel ping, ip.yunohost.org == VPS IP) and
+    roll back on failure. Emergency off stops the tunnel. IPv6 default egress
+    is blackholed while the tunnel is up.
 
 scripts/_common.sh
-    Sources _compy.sh; adds init/install/regen/secure helpers; integrate_services now starts the Compy tunnel after restore even if compy_atboot was never set; uses nullglob so a missing conf is not treated as a literal glob.
+    Sources _compy.sh; adds init/install/regen/secure helpers and
+    compy_ensure_settings (upgrade-safe new keys). Ships route/watchdog
+    helpers. integrate_services starts a full-tunnel Compy interface with
+    verify-then-commit after restore (rolls back if the VPS is down); uses
+    nullglob so a missing conf is not treated as a literal glob.
 
 scripts/backup
-    Added a shellcheck directive only: app and install_dir are set by the YunoHost helpers. No backup behavior change.
+    Backs up the watchdog systemd units as well as the WireGuard client unit.
+    app and install_dir are set by the YunoHost helpers.
 
 scripts/ports_from_yunohost.sh
     New. Extracts the YunoHost firewall port list for the panel. Copied to $install_dir by install and upgrade. nounset is enabled only when the file is executed, not when it is sourced.
+
+scripts/compy_route_up.sh
+    New. wg-quick PostUp: extra main-table routes for the bypass list and the
+    endpoint /32, plus an IPv6 default blackhole.
+
+scripts/compy_route_down.sh
+    New. wg-quick PostDown: removes only the routes PostUp added.
+
+scripts/compy_watchdog.sh
+    New. If the tunnel is up but the handshake is older than 180s, takes it
+    down so internet can use the home WAN again.
 
 scripts/config
     Merges the Compy helpers (via _common.sh); fixes the undefined ${added_interfaces[@]} removal bug with a real set-difference; regenerates the panel from the template; refuses to add or delete the reserved 'compy' interface from Advanced interfaces; forces mode 600 on uploaded conf files.
 
 scripts/install
-    Initializes Compy settings, ships vps_setup.sh and ports_from_yunohost.sh into $install_dir, and creates the dedicated SSH key so the public key is visible in the panel after install.
+    Initializes Compy settings, ships vps_setup.sh, ports_from_yunohost.sh, and
+    the route/watchdog helpers into $install_dir, installs the watchdog units
+    (timer off until a tunnel is verified), and creates the dedicated SSH key
+    so the public key is visible in the panel after install.
 
 scripts/upgrade
-    Stops copying the live config_panel.toml over the package copy (that hid the new panel). Initializes missing Compy settings, ships the scripts, ensures the SSH key, chmods existing confs to 600, and regenerates the live panel from the template plus any extra interfaces.
+    Stops copying the live config_panel.toml over the package copy (that hid the new panel). Initializes missing Compy settings, ships the scripts and watchdog units, ensures the SSH key, chmods existing confs to 600, and regenerates the live panel from the template plus any extra interfaces. Does not rewrite an existing live tunnel config; re-run setup to switch a previous split-tunnel install to full tunnel.
 
 scripts/restore
-    Re-ships the current package scripts into $install_dir, chmods confs to 600, then integrate_services (which now also starts wireguard_client@compy when compy.conf exists).
+    Re-ships the current package scripts into $install_dir, installs watchdog
+    units, chmods confs to 600, then integrate_services (full-tunnel Compy
+    start is verified and rolled back if the VPS is unreachable).
 
 scripts/remove
-    Notes that the VPS side is not uninstalled automatically; uses nullglob when looping confs.
+    Notes that the VPS side is not uninstalled automatically; stops and removes
+    the watchdog units; uses nullglob when looping confs.
 
 doc/ADMIN.md
-    Points admins at the Public access page and states that this fork is untested on real hardware.
+    Points admins at the Public access page; documents full-tunnel behaviour,
+    DynDNS, PTR/mail, the VPS as a single point of failure, and that this fork
+    is untested on real hardware.
 
 doc/ADMIN_fr.md
     French counterpart of the ADMIN.md note.

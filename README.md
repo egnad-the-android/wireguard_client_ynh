@@ -45,6 +45,12 @@ Please see <https://doc.yunohost.org/packaging_apps> for more information.
 
 This is an unofficial fork of `wireguard_client_ynh`. It adds a **Public access (Compy)** page to the app configuration panel. That page can turn a cheap Debian VPS into a public gateway for a home YunoHost server that has no public IP. The VPS runs only WireGuard and NAT; all HTTPS certificates stay on YunoHost.
 
+After setup, **all IPv4 internet traffic from the home server goes through the VPS**, except local networks (LAN, RFC1918, and Starlink CGNAT `100.64.0.0/10`). YunoHost then sees the VPS public IP, so diagnosis, Let's Encrypt, nohost.me DynDNS (automatic via ip.yunohost.org — no manual `yunohost dyndns update --ipv4`), and outbound mail all use that address. Set a PTR/rDNS record for the VPS in the provider panel (for example the US OVH VPS panel). For a custom domain, point the A record at the VPS IPv4 and do not publish an AAAA record (IPv6 internet is disabled while the tunnel is up).
+
+The VPS is a **single point of failure** and all bandwidth counts through it (OVH US standard region is typically unmetered 500 Mbps). If the VPS dies, this box loses internet until a watchdog (about 3 minutes without a handshake) takes the tunnel down, or you click **Turn tunnel off**. LAN and LAN SSH stay reachable. Setup is verify-then-commit: the tunnel is kept only if handshake, a tunnel ping, and `https://ip.yunohost.org` returning the VPS IP all succeed; otherwise it is rolled back.
+
+This works behind carrier-grade NAT, including Starlink: the underlay CGNAT/LAN routes stay outside the tunnel.
+
 **This package has not been tested on a real YunoHost server or a real VPS.** Treat it as a starting point, not a production install.
 
 ### User flow
@@ -53,8 +59,8 @@ This is an unofficial fork of `wireguard_client_ynh`. It adds a **Public access 
 2. Open the app configuration panel, **Public access (Compy)** page, and copy the SSH public key shown there.
 3. In the OVH (or other) panel, create a minimal Debian VPS and add that public key for the SSH user (often `debian` on OVH Debian images).
 4. Back in YunoHost, enter the VPS IP address or hostname (and the SSH user or port if they are not the defaults). Click **Test connection**, compare the fingerprint with the provider console, then click **Pin host key**.
-5. Review the port list (pre-filled from the YunoHost firewall) and press **Connect and set up the VPS**.
-6. Point the domain's DNS A record at the VPS IPv4 address. Do not publish an AAAA record in this version.
+5. Review the port list (pre-filled from the YunoHost firewall) and the networks that stay outside the tunnel, then press **Connect and set up the VPS**.
+6. For nohost.me, wait for DynDNS to pick up the VPS IP. For a custom domain, point the DNS A record at the VPS IPv4 address. Do not publish an AAAA record in this version. Set PTR/rDNS on the VPS if you send mail.
 
 Removing the app does not uninstall the VPS side. To tear the gateway down later, run the setup script on the VPS with `--uninstall` while you still have SSH access.
 
