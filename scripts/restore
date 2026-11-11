@@ -27,6 +27,8 @@ compy_secure_conf_files
 ynh_script_progression "Restoring system configurations related to $app..."
 
 ynh_restore "/etc/systemd/system/wireguard_client@.service"
+# Install watchdog units from the current package (correct __INSTALL_DIR__).
+compy_install_watchdog_units
 systemctl daemon-reload
 integrate_services
 

@@ -25,6 +25,10 @@ ynh_backup "$install_dir"
 # Backup the systemd service unit
 ynh_backup "/etc/systemd/system/wireguard_client@.service"
 
+# Watchdog units (installed even before the tunnel is first set up)
+ynh_backup "/etc/systemd/system/compy-watchdog.service"
+ynh_backup "/etc/systemd/system/compy-watchdog.timer"
+
 #=================================================
 # END OF SCRIPT
 #=================================================

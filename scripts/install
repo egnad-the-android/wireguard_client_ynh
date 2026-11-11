@@ -17,7 +17,7 @@ source /usr/share/yunohost/helpers
 ynh_app_setting_set --key=interfaces --value=""
 
 # Compy Public access panel defaults, SSH key, and shipped scripts
-compy_init_settings
+compy_ensure_settings
 compy_install_files
 compy_ensure_ssh_key
 

@@ -31,7 +31,26 @@ compy_init_settings() {
     ynh_app_setting_set --key=compy_ports --value=""
     ynh_app_setting_set --key=compy_host_pinned --value="0"
     ynh_app_setting_set --key=compy_last_result --value=""
+    ynh_app_setting_set --key=compy_bypass_nets --value=""
+    ynh_app_setting_set --key=compy_full_tunnel --value="0"
     ynh_app_setting_set --key=compy_initialized --value="1"
+}
+
+# Fill keys added after the first Compy release, without overwriting values.
+compy_ensure_settings() {
+    compy_init_settings
+    if [[ -z "$(ynh_app_setting_get --key=compy_bypass_nets 2>/dev/null || true)" ]]; then
+        # Empty is also the "please auto-fill" sentinel used by the getter, so
+        # only write the key when it is completely absent from settings.yml.
+        if ! grep -q '^compy_bypass_nets:' "/etc/yunohost/apps/${app}/settings.yml" 2>/dev/null; then
+            ynh_app_setting_set --key=compy_bypass_nets --value=""
+        fi
+    fi
+    if [[ -z "$(ynh_app_setting_get --key=compy_full_tunnel 2>/dev/null || true)" ]]; then
+        if ! grep -q '^compy_full_tunnel:' "/etc/yunohost/apps/${app}/settings.yml" 2>/dev/null; then
+            ynh_app_setting_set --key=compy_full_tunnel --value="0"
+        fi
+    fi
 }
 
 # Copy shipped scripts into $install_dir so they are backed up and available
@@ -50,6 +69,16 @@ compy_install_files() {
         chmod 755 "$install_dir/ports_from_yunohost.sh"
         chown root:root "$install_dir/ports_from_yunohost.sh"
     fi
+    local helper
+    for helper in compy_route_up.sh compy_route_down.sh compy_watchdog.sh; do
+        if [[ -f "$pkg/scripts/$helper" ]]; then
+            cp "$pkg/scripts/$helper" "$install_dir/$helper"
+            chmod 755 "$install_dir/$helper"
+            chown root:root "$install_dir/$helper"
+        fi
+    done
+    # Units are installed (timer off) so backup/restore paths always exist.
+    compy_install_watchdog_units
 }
 
 # Rebuild the live config panel from the package template plus one part
@@ -106,8 +135,22 @@ integrate_services() {
             atboot="${atboot:-1}"
         fi
         if [[ "${atboot:-0}" -eq 1 ]]; then
-            ynh_print_info "$i interface was also enabled at boot, let's start it..."
-            ynh_systemctl --service="wireguard_client@$i.service" --action=start || true
+            if [[ "$i" == "compy" ]] && grep -q '^AllowedIPs *= *0\.0\.0\.0/0' "$file"; then
+                ynh_print_info "Starting the Compy full tunnel with verify-then-commit (rolls back if the VPS is not reachable)..."
+                local server_ip public_ip
+                server_ip="$(ynh_app_setting_get --key=compy_server_ip || true)"
+                public_ip="$(ynh_app_setting_get --key=compy_public_ip || true)"
+                if [[ -n "$server_ip" ]]; then
+                    if ! compy_start_and_verify "$server_ip" "$public_ip"; then
+                        ynh_print_err "Compy full tunnel was not started: verification failed and the change was rolled back."
+                    fi
+                else
+                    ynh_print_err "Not auto-starting the Compy full tunnel (missing saved VPS tunnel address). Use the Public access panel."
+                fi
+            else
+                ynh_print_info "$i interface was also enabled at boot, let's start it..."
+                ynh_systemctl --service="wireguard_client@$i.service" --action=start || true
+            fi
         fi
     done
     shopt -u nullglob

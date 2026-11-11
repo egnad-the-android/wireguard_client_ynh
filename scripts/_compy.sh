@@ -258,6 +258,10 @@ compy_ssh_script() {
 
 # ---------------------------- WG client conf ----------------------------
 
+COMPY_MTU="${COMPY_MTU:-1420}"
+COMPY_IP_CHECK_URL="${COMPY_IP_CHECK_URL:-https://ip.yunohost.org}"
+COMPY_VERIFY_HANDSHAKE_TRIES="${COMPY_VERIFY_HANDSHAKE_TRIES:-15}"
+
 _compy_second_host() {
     # Given a CIDR (10.99.0.0/24) print the second host (10.99.0.2) and the
     # first host (10.99.0.1) as: first second prefix. Uses python3.
@@ -271,8 +275,131 @@ print(hosts[0], hosts[1], net.prefixlen, net.with_prefixlen)
 ' "$1"
 }
 
+# Auto list: connected IPv4 subnets plus RFC1918, link-local, and CGNAT
+# (100.64.0.0/10, used as the WAN on Starlink). These stay in the main
+# routing table so LAN / underlay access is never swallowed by 0.0.0.0/0.
+compy_default_bypass_nets() {
+    python3 -c '
+import subprocess, ipaddress, sys
+
+defaults = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+]
+seen = list(defaults)
+try:
+    out = subprocess.check_output(["ip", "-4", "-o", "route", "show", "table", "main"], text=True)
+except Exception:
+    out = ""
+for line in out.splitlines():
+    parts = line.split()
+    if not parts or parts[0] in ("default", "unicast"):
+        continue
+    # "default" already skipped; a line starts with the prefix or "nexthop"
+    prefix = parts[0]
+    dev = ""
+    if "dev" in parts:
+        dev = parts[parts.index("dev") + 1]
+    if dev in ("lo", "compy", "wg0"):
+        continue
+    try:
+        net = ipaddress.ip_network(prefix, strict=False)
+    except Exception:
+        continue
+    if net.version != 4 or net.prefixlen == 0 or net.is_multicast or net.is_unspecified:
+        continue
+    if any(net == x for x in seen):
+        continue
+    seen.append(net)
+print(", ".join(str(n) for n in seen))
+'
+}
+
+compy_current_bypass_nets() {
+    local saved
+    saved="$(_compy_setting compy_bypass_nets || true)"
+    if [[ -z "$saved" ]]; then
+        saved="$(compy_default_bypass_nets)"
+    fi
+    printf '%s' "$saved"
+}
+
+compy_resolve_ipv4() {
+    # Resolve a host or pass through an IPv4 address. Empty on failure.
+    python3 -c '
+import socket, sys
+host = (sys.argv[1] or "").strip()
+if not host:
+    sys.exit(0)
+try:
+    print(socket.getaddrinfo(host, None, socket.AF_INET)[0][4][0])
+except Exception:
+    sys.exit(0)
+' "$1"
+}
+
+compy_save_underlay_and_endpoint() {
+    # Must be called BEFORE wg-quick up, while the home WAN default is active.
+    _compy_paths
+    local line via dev underlay
+    line="$(ip -4 route show default table main 2>/dev/null | awk '
+        /^default/ {
+            via=""; dev=""; metric=0+0;
+            for (i=1;i<=NF;i++) {
+                if ($i=="via") via=$(i+1);
+                if ($i=="dev") dev=$(i+1);
+                if ($i=="metric") metric=$(i+1);
+            }
+            if (dev != "" && dev != "compy" && dev != "wg0") {
+                printf "%s\t%s\t%s\n", metric, via, dev;
+            }
+        }' | sort -n | head -1)"
+    via="$(printf '%s' "$line" | cut -f2)"
+    dev="$(printf '%s' "$line" | cut -f3)"
+    underlay=""
+    if [[ -n "$dev" && -n "$via" ]]; then
+        underlay="via ${via} dev ${dev}"
+    elif [[ -n "$dev" ]]; then
+        underlay="dev ${dev}"
+    fi
+    if [[ -n "$underlay" ]]; then
+        printf '%s\n' "$underlay" >"$install_dir/compy_underlay.route"
+        chmod 600 "$install_dir/compy_underlay.route"
+    else
+        rm -f "$install_dir/compy_underlay.route"
+        ynh_print_err "Could not detect the current IPv4 default route; LAN connected routes will still be kept by wg-quick, but extra bypass routes may be skipped."
+    fi
+
+    local host ep
+    host="$(_compy_setting compy_vps_host || true)"
+    ep="$(compy_resolve_ipv4 "$host")"
+    if [[ -n "$ep" ]]; then
+        printf '%s\n' "$ep" >"$install_dir/compy_endpoint"
+        chmod 600 "$install_dir/compy_endpoint"
+    else
+        rm -f "$install_dir/compy_endpoint"
+    fi
+
+    printf '%s\n' "$(compy_current_bypass_nets)" >"$install_dir/compy_bypass_nets"
+    chmod 600 "$install_dir/compy_bypass_nets"
+}
+
 compy_write_client_conf() {
     # Args: server_pubkey endpoint_host endpoint_port server_ip peer_ip prefixlen subnet
+    # Full-tunnel IPv4: AllowedIPs=0.0.0.0/0 and Table=auto (wg-quick default).
+    # wg-quick then installs an fwmark and `ip rule ... suppress_prefixlength 0`,
+    # so more-specific routes in table main (connected LAN, Starlink CGNAT
+    # underlay, static routes) keep working, and WireGuard's own packets
+    # (fwmarked) still use the home WAN to reach the endpoint.
+    # A computed AllowedIPs list that "subtracts" RFC1918/CGNAT is more
+    # brittle: it can miss a connected subnet or the Starlink underlay and
+    # cut off LAN/SSH. We still install extra main-table routes for the
+    # panel bypass list and the endpoint /32 (PostUp) as belt and braces.
+    # IPv6 is not tunnelled; PostUp blackholes the IPv6 default route.
+    # Do not set DNS= (YunoHost's local resolver must keep running).
     _compy_paths
     compy_ensure_wg_keys
     local server_pub="$1" endpoint_host="$2" endpoint_port="$3"
@@ -280,66 +407,203 @@ compy_write_client_conf() {
     local priv
     priv="$(tr -d '\n' <"$COMPY_WG_KEY")"
     _compy_is_wg_key "$server_pub" || ynh_die --message="The VPS returned an invalid server public key."
+    if [[ -f "$COMPY_CONF" ]]; then
+        cp -a "$COMPY_CONF" "${COMPY_CONF}.bak"
+    fi
     umask 077
     cat >"$COMPY_CONF" <<EOF
 [Interface]
-# Generated by Compy Level 2. Do not add PostUp/PostDown or DNS=.
-# AllowedIPs is the tunnel subnet only: this box's general internet
-# traffic must keep using the home WAN, not the VPS.
+# Generated by Compy Level 2 (full-tunnel IPv4). Do not set DNS= or Table=off.
+# AllowedIPs 0.0.0.0/0 + wg-quick Table=auto keeps connected LAN/underlay
+# routes via suppress_prefixlength 0. PostUp adds the bypass-list routes
+# and blackholes IPv6 default egress. Tunnel subnet is ${subnet}.
 Address = ${peer_ip}/${prefixlen}
 PrivateKey = ${priv}
+MTU = ${COMPY_MTU}
+PostUp = ${install_dir}/compy_route_up.sh %i
+PostDown = ${install_dir}/compy_route_down.sh %i
 
 [Peer]
 PublicKey = ${server_pub}
 Endpoint = ${endpoint_host}:${endpoint_port}
-AllowedIPs = ${subnet}
+AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
     chown root:root "$COMPY_CONF"
     chmod 600 "$COMPY_CONF"
 }
 
-compy_start_tunnel() {
-    _compy_paths
-    [[ -f "$COMPY_CONF" ]] || ynh_die --message="Missing $COMPY_CONF"
-    # So restore / integrate_services will start the tunnel at boot.
-    ynh_app_setting_set --key="${COMPY_IF}_atboot" --value=1
-    systemctl enable --quiet "wireguard_client@${COMPY_IF}.service" || true
-    if systemctl is-active --quiet "wireguard_client@${COMPY_IF}.service"; then
-        systemctl restart "wireguard_client@${COMPY_IF}.service" \
-            || ynh_die --message="Failed to restart wireguard_client@${COMPY_IF}. Check journalctl -u wireguard_client@${COMPY_IF}."
-    else
-        systemctl start "wireguard_client@${COMPY_IF}.service" \
-            || ynh_die --message="Failed to start wireguard_client@${COMPY_IF}. Check journalctl -u wireguard_client@${COMPY_IF}."
+compy_install_watchdog_units() {
+    local pkg dest_svc dest_tmr
+    pkg="$(compy_pkg_dir)"
+    dest_svc="/etc/systemd/system/compy-watchdog.service"
+    dest_tmr="/etc/systemd/system/compy-watchdog.timer"
+    [[ -n "${install_dir:-}" ]] || return 0
+    if [[ -f "$pkg/conf/compy-watchdog.service" ]]; then
+        sed "s|__INSTALL_DIR__|${install_dir}|g" "$pkg/conf/compy-watchdog.service" >"$dest_svc"
+        chmod 644 "$dest_svc"
     fi
-    # Register with YunoHost's service list (idempotent-ish).
-    yunohost service add "wireguard_client@${COMPY_IF}" \
-        --description="WireGuard VPN Client ${COMPY_IF} (Compy public access)" \
-        --test_status="wg | grep \"interface: ${COMPY_IF}\" -q" 2>/dev/null || true
+    if [[ -f "$pkg/conf/compy-watchdog.timer" ]]; then
+        cp "$pkg/conf/compy-watchdog.timer" "$dest_tmr"
+        chmod 644 "$dest_tmr"
+    fi
+    systemctl daemon-reload || true
 }
 
-compy_verify_tunnel() {
+compy_enable_watchdog() {
+    compy_install_watchdog_units
+    systemctl enable --now compy-watchdog.timer >/dev/null 2>&1 || true
+}
+
+compy_disable_watchdog() {
+    systemctl disable --now compy-watchdog.timer >/dev/null 2>&1 || true
+}
+
+compy_stop_tunnel() {
+    _compy_paths
+    systemctl stop "wireguard_client@${COMPY_IF}.service" 2>/dev/null || true
+    if ip link show dev "$COMPY_IF" >/dev/null 2>&1; then
+        wg-quick down "$COMPY_CONF" 2>/dev/null || true
+    fi
+}
+
+compy_bring_up_tunnel() {
+    _compy_paths
+    [[ -f "$COMPY_CONF" ]] || ynh_die --message="Missing $COMPY_CONF"
+    [[ -x "$install_dir/compy_route_up.sh" ]] || ynh_die --message="Missing $install_dir/compy_route_up.sh. Upgrade or reinstall the app so the route helpers are shipped."
+    compy_save_underlay_and_endpoint
+    # Always stop first: systemctl start on a RemainAfterExit oneshot is a
+    # no-op if the unit is already active, and a half-up interface must not
+    # be left in place.
+    compy_stop_tunnel
+    # Do not enable at boot until verify-then-commit succeeds.
+    if ! systemctl start "wireguard_client@${COMPY_IF}.service"; then
+        ynh_print_err "Failed to start wireguard_client@${COMPY_IF}. The default route was not committed. Check journalctl -u wireguard_client@${COMPY_IF}."
+        return 1
+    fi
+    return 0
+}
+
+compy_commit_tunnel() {
+    _compy_paths
+    ynh_app_setting_set --key="${COMPY_IF}_atboot" --value=1
+    ynh_app_setting_set --key="compy_full_tunnel" --value=1
+    systemctl enable --quiet "wireguard_client@${COMPY_IF}.service" || true
+    yunohost service add "wireguard_client@${COMPY_IF}" \
+        --description="WireGuard VPN Client ${COMPY_IF} (Compy public access, full tunnel)" \
+        --test_status="wg | grep \"interface: ${COMPY_IF}\" -q" 2>/dev/null || true
+    rm -f "$install_dir/compy_watchdog_tripped" "${COMPY_CONF}.bak"
+    compy_enable_watchdog
+}
+
+compy_rollback_tunnel() {
+    # Take the new tunnel down, restore the previous conf if any, and try to
+    # bring the previous (usually split-tunnel) conf back so the box is no
+    # worse than before. Never enable-at-boot here.
+    local reason="${1:-verification failed}"
+    _compy_paths
+    ynh_print_err "Rolling back the full-tunnel config: $reason"
+    compy_stop_tunnel
+    systemctl disable --quiet "wireguard_client@${COMPY_IF}.service" 2>/dev/null || true
+    ynh_app_setting_set --key="${COMPY_IF}_atboot" --value=0
+    ynh_app_setting_set --key="compy_full_tunnel" --value=0
+    if [[ -f "${COMPY_CONF}.bak" ]]; then
+        mv -f "${COMPY_CONF}.bak" "$COMPY_CONF"
+        ynh_print_info "Restored the previous WireGuard client config."
+        systemctl start "wireguard_client@${COMPY_IF}.service" 2>/dev/null || true
+    else
+        rm -f "$COMPY_CONF"
+    fi
+}
+
+compy_verify_full_tunnel() {
+    # Handshake + ping the VPS tunnel IP + confirm ip.yunohost.org sees the
+    # VPS public IPv4. Any failure should be followed by a rollback.
     local server_ip="$1"
-    local handshake
-    # Wait up to ~20s for a handshake.
-    local _try
-    for ((_try=1; _try<=10; _try++)); do
+    local expect_ip="${2:-}"
+    local handshake _try seen
+    for ((_try=1; _try<=COMPY_VERIFY_HANDSHAKE_TRIES; _try++)); do
         handshake="$(wg show "$COMPY_IF" latest-handshakes 2>/dev/null | awk '{print $2; exit}')"
         if [[ "$handshake" =~ ^[0-9]+$ ]] && ((handshake > 0)); then
             ynh_print_info "WireGuard handshake is up (latest-handshakes=$handshake)."
-            if ping -c 3 -W 3 "$server_ip" >/dev/null 2>&1; then
-                ynh_print_info "Ping to ${server_ip} (VPS tunnel address) succeeded."
-                return 0
-            else
-                ynh_print_err "Handshake is up but ping to ${server_ip} failed. The tunnel may still be usable for forwarded ports; check wg show ${COMPY_IF} and the VPS log /var/log/compy-vps-setup.log."
-                return 1
-            fi
+            break
         fi
         sleep 2
+        handshake=""
     done
-    ynh_die --message="No WireGuard handshake with the VPS after 20 seconds. The VPS script may have succeeded but this box cannot reach UDP ${COMPY_HOST:-}:$(_compy_setting compy_wg_port). Check the provider firewall (allow UDP $(_compy_setting compy_wg_port)) and journalctl -u wireguard_client@${COMPY_IF}."
+    if [[ ! "$handshake" =~ ^[0-9]+$ ]] || ((handshake == 0)); then
+        printf '%s' "No WireGuard handshake with the VPS after $((COMPY_VERIFY_HANDSHAKE_TRIES * 2)) seconds. Check the provider firewall (allow UDP $(_compy_setting compy_wg_port)) and journalctl -u wireguard_client@${COMPY_IF}."
+        return 1
+    fi
+    if ! ping -c 3 -W 3 "$server_ip" >/dev/null 2>&1; then
+        printf '%s' "Handshake is up but ping to ${server_ip} (VPS tunnel address) failed."
+        return 1
+    fi
+    ynh_print_info "Ping to ${server_ip} (VPS tunnel address) succeeded."
+
+    if [[ -z "$expect_ip" ]]; then
+        expect_ip="$(_compy_setting compy_public_ip || true)"
+    fi
+    if [[ -z "$expect_ip" ]]; then
+        expect_ip="$(compy_resolve_ipv4 "$(_compy_setting compy_vps_host || true)")"
+    fi
+
+    local seen_ip=""
+    if command -v curl >/dev/null 2>&1; then
+        seen_ip="$(curl -4 -fsS --max-time 15 "$COMPY_IP_CHECK_URL" 2>/dev/null | tr -d '[:space:]' || true)"
+    else
+        seen_ip="$(python3 -c '
+import sys, urllib.request
+url = sys.argv[1]
+try:
+    print(urllib.request.urlopen(url, timeout=15).read().decode().strip())
+except Exception:
+    sys.exit(0)
+' "$COMPY_IP_CHECK_URL" || true)"
+    fi
+    if [[ ! "$seen_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        printf '%s' "Could not read a public IPv4 from ${COMPY_IP_CHECK_URL} through the tunnel (got '${seen_ip:-empty}'). Outbound MASQUERADE on the VPS may have failed."
+        return 1
+    fi
+    ynh_print_info "${COMPY_IP_CHECK_URL} returned ${seen_ip}."
+    if [[ -n "$expect_ip" && "$seen_ip" != "$expect_ip" ]]; then
+        printf '%s' "Public IPv4 through the tunnel is ${seen_ip}, but the VPS is ${expect_ip}. The default route is not going through the VPS as expected."
+        return 1
+    fi
+    if [[ -z "$expect_ip" ]]; then
+        ynh_print_err "Could not determine the VPS public IP to compare against; accepting ${seen_ip} from ${COMPY_IP_CHECK_URL}."
+    fi
+    _compy_set compy_public_ip "$seen_ip"
+    return 0
 }
 
+compy_start_and_verify() {
+    local server_ip="$1"
+    local expect_ip="${2:-}"
+    local reason=""
+    if ! compy_bring_up_tunnel; then
+        reason="Failed to start wireguard_client@${COMPY_IF}. The default route was not committed. Check journalctl -u wireguard_client@${COMPY_IF}."
+        _compy_set compy_last_result "fail: $reason"
+        compy_rollback_tunnel "$reason"
+        COMPY_VERIFY_FAIL_REASON="$reason"
+        return 1
+    fi
+    set +e
+    reason="$(compy_verify_full_tunnel "$server_ip" "$expect_ip")"
+    local rc=$?
+    set -e
+    if [[ $rc -ne 0 ]]; then
+        _compy_set compy_last_result "fail: $reason"
+        compy_rollback_tunnel "$reason"
+        ynh_print_err "Full-tunnel verification failed and the change was rolled back (this box should be using the home internet path again; LAN was not moved). ${reason}"
+        COMPY_VERIFY_FAIL_REASON="$reason"
+        return 1
+    fi
+    compy_commit_tunnel
+    return 0
+}
+
+# ---------------------------- result parsing ----------------------------
 # ---------------------------- result parsing ----------------------------
 
 compy_parse_result() {
@@ -352,6 +616,7 @@ compy_parse_result() {
     COMPY_RESULT_SERVER_IP="$(awk -F= '/^COMPY_WG_SERVER_IP=/{print $2}' "$out_file" | tail -1)"
     COMPY_RESULT_PEER_IP="$(awk -F= '/^COMPY_WG_PEER_IP=/{print $2}' "$out_file" | tail -1)"
     COMPY_RESULT_SUBNET="$(awk -F= '/^COMPY_WG_SUBNET=/{print $2}' "$out_file" | tail -1)"
+    COMPY_RESULT_PUBLIC_IP="$(awk -F= '/^COMPY_PUBLIC_IP=/{print $2}' "$out_file" | tail -1)"
 }
 
 compy_run_vps_setup() {
@@ -384,6 +649,9 @@ compy_run_vps_setup() {
     _compy_set compy_server_pubkey "$COMPY_RESULT_PUBKEY"
     _compy_set compy_server_ip "$COMPY_RESULT_SERVER_IP"
     _compy_set compy_peer_ip "${COMPY_RESULT_PEER_IP:-}"
+    if [[ -n "${COMPY_RESULT_PUBLIC_IP:-}" ]]; then
+        _compy_set compy_public_ip "$COMPY_RESULT_PUBLIC_IP"
+    fi
 }
 
 # ---------------------------- getters ----------------------------
@@ -456,14 +724,38 @@ ask:
 EOF
 }
 
+get__compy_bypass_nets() {
+    local saved
+    saved="$(_compy_setting compy_bypass_nets || true)"
+    if [[ -z "$saved" ]]; then
+        saved="$(compy_default_bypass_nets)"
+        _compy_set compy_bypass_nets "$saved"
+    fi
+    _compy_return_value "$saved"
+}
+
 get__compy_status() {
     _compy_paths
     local style="info"
     local body="The tunnel has not been set up yet."
-    local last handshake iface_state ping_s=""
+    local last handshake iface_state ping_s="" mode_s="" ip_s="" wd_s=""
     last="$(_compy_setting compy_last_result || true)"
-    local server_ip
+    local server_ip public_ip
     server_ip="$(_compy_setting compy_server_ip || true)"
+    public_ip="$(_compy_setting compy_public_ip || true)"
+
+    if [[ -f "$COMPY_CONF" ]]; then
+        if grep -q '^AllowedIPs *= *0\.0\.0\.0/0' "$COMPY_CONF"; then
+            mode_s=" This is a full-tunnel config: all IPv4 internet should leave through the VPS. LAN, RFC1918, and CGNAT/Starlink subnets stay on the home network."
+        else
+            mode_s=" The current config is still split-tunnel (only the WireGuard subnet). Re-run Connect and set up the VPS to switch to full tunnel; that step verifies connectivity and rolls back if it fails."
+        fi
+    fi
+
+    if [[ -f "$install_dir/compy_watchdog_tripped" ]]; then
+        style="warning"
+        wd_s=" The watchdog stopped the tunnel ($(tr -d '\n' <"$install_dir/compy_watchdog_tripped")). Internet should be back on the home WAN. Start the tunnel again after the VPS is healthy."
+    fi
 
     if [[ -f "$COMPY_CONF" ]] && wg show "$COMPY_IF" >/dev/null 2>&1; then
         handshake="$(wg show "$COMPY_IF" latest-handshakes 2>/dev/null | awk '{print $2; exit}')"
@@ -475,7 +767,7 @@ get__compy_status() {
                 body="Tunnel ${COMPY_IF} is up. Last handshake ${ago}s ago. Interface state: ${iface_state}."
             else
                 style="warning"
-                body="Tunnel ${COMPY_IF} exists but the last handshake was ${ago}s ago (WireGuard usually refreshes every ~25s with PersistentKeepalive). The VPS may be unreachable."
+                body="Tunnel ${COMPY_IF} exists but the last handshake was ${ago}s ago (WireGuard usually refreshes every ~25s with PersistentKeepalive). The VPS may be unreachable; if this lasts a few minutes the watchdog will take the tunnel down to restore home internet."
             fi
         else
             style="warning"
@@ -486,7 +778,13 @@ get__compy_status() {
         elif [[ -n "$server_ip" ]]; then
             ping_s=" Ping to ${server_ip} failed."
         fi
-        body="${body}${ping_s}"
+        body="${body}${ping_s}${mode_s}"
+        if [[ -n "$public_ip" ]]; then
+            ip_s=" Last confirmed public IPv4 (ip.yunohost.org): ${public_ip}."
+            body="${body}${ip_s}"
+        fi
+    else
+        body="The tunnel has not been set up yet, or it is stopped.${mode_s}${wd_s}"
     fi
     if [[ -n "$last" ]]; then
         body="${body}
@@ -591,11 +889,19 @@ run__compy_setup_vps() {
     local subnet="${COMPY_RESULT_SUBNET:-$wg_subnet}"
     local ep_port="${COMPY_RESULT_WG_PORT:-$wg_port}"
 
-    ynh_print_info "VPS is ready. Server public key: ${COMPY_RESULT_PUBKEY}. Writing the local client config and starting the tunnel."
+    local public_ip="${COMPY_RESULT_PUBLIC_IP:-}"
+    ynh_print_info "VPS is ready. Server public key: ${COMPY_RESULT_PUBKEY}. Writing the full-tunnel client config, bringing it up, and verifying that ip.yunohost.org sees the VPS. If that fails, the change is rolled back."
     compy_write_client_conf "$COMPY_RESULT_PUBKEY" "$COMPY_HOST" "$ep_port" "$server_ip" "$peer_ip" "$prefixlen" "$subnet"
-    compy_start_tunnel
-    compy_verify_tunnel "$server_ip"
-    ynh_print_info "Done. Point the domain DNS A record at ${COMPY_HOST} (no AAAA in this version), then click Test public ports. Let's Encrypt will keep running on this YunoHost box."
+    if ! compy_start_and_verify "$server_ip" "$public_ip"; then
+        ynh_die --message="Full-tunnel verification failed and the change was rolled back (this box should be using the home internet path again; LAN was not moved). The VPS still SNATs inbound DNATed traffic, so an older split-tunnel config keeps working. ${COMPY_VERIFY_FAIL_REASON:-unknown reason}"
+    fi
+    # Home is now a verified full tunnel: drop inbound SNAT so YunoHost sees real client IPs.
+    ynh_print_info "Tunnel verified. Updating the VPS firewall so visitors' real IPs are visible on this box..."
+    if ! compy_run_vps_setup         --peer-pubkey "$peer_pub"         --ports "$ports"         --wg-port "$wg_port"         --ssh-port "$COMPY_SPORT"         --wg-subnet "$wg_subnet"         --no-dnat-snat; then
+        ynh_print_err "The tunnel is up, but the VPS could not drop inbound SNAT. Visitor IPs may still appear as the gateway address. You can retry Re-sync ports later."
+    fi
+    _compy_set compy_last_result "ok: full tunnel, public IP $(_compy_setting compy_public_ip || true)"
+    ynh_print_info "Done. All IPv4 internet from this box now leaves through ${COMPY_HOST}. nohost.me DynDNS will auto-detect the VPS IP (no manual dyndns update, no removecron). For a custom domain, point the A record at ${COMPY_HOST} and do not publish an AAAA record. Set a PTR/rDNS record for the VPS in the OVH panel so outbound mail is accepted. If the VPS dies, this box loses internet until the watchdog (about 3 minutes) takes the tunnel down or you click Turn tunnel off; LAN and LAN SSH stay reachable."
 }
 
 run__compy_resync_ports() {
@@ -608,13 +914,18 @@ run__compy_resync_ports() {
     wg_subnet="$(_compy_setting compy_wg_subnet)"
     peer_pub="$(tr -d '\n' <"$COMPY_WG_PUB")"
     [[ -n "$ports" ]] || ynh_die --message="The port list is empty."
-    ynh_print_info "Re-syncing ports on ${COMPY_HOST}: $ports"
+    local snat_flag="--dnat-snat"
+    if [[ "$(_compy_setting compy_full_tunnel || true)" == "1" ]] && grep -q '^AllowedIPs *= *0\.0\.0\.0/0' "$COMPY_CONF" 2>/dev/null; then
+        snat_flag="--no-dnat-snat"
+    fi
+    ynh_print_info "Re-syncing ports on ${COMPY_HOST}: $ports (${snat_flag})"
     compy_run_vps_setup \
         --peer-pubkey "$peer_pub" \
         --ports "$ports" \
         --wg-port "$wg_port" \
         --ssh-port "$COMPY_SPORT" \
-        --wg-subnet "$wg_subnet"
+        --wg-subnet "$wg_subnet" \
+        "$snat_flag"
     ynh_print_info "Port list re-applied on the VPS."
 }
 
@@ -637,12 +948,11 @@ run__compy_test_ports() {
         ynh_print_info "  $(wg show "$COMPY_IF" latest-handshakes 2>/dev/null)"
     fi
 
-    # Official `yunohost diagnosis run ports` is the wrong vantage point:
-    # diagnosis.yunohost.org probes the SOURCE IP of the request, which
-    # from this home box is the home ISP address, not the VPS. We instead
-    # POST the check from the VPS so the probe targets the VPS public IP.
-    # (Inferred from the client API in src/diagnosis.py + 14-ports.py;
-    # the server source was not re-read in this pass — see REPORT.md.)
+    # diagnosis.yunohost.org probes the SOURCE IP of the request. With the
+    # full tunnel up that is the VPS public IP, so official
+    # `yunohost diagnosis run ports` from this box should work. We still
+    # also POST the check from the VPS so the probe works even if the
+    # tunnel is down (DNAT on the VPS remains).
     local tcp_list
     tcp_list="$(printf '%s' "$ports" | awk -F';' '{
         for (i=1;i<=NF;i++) if ($i ~ /^tcp:/) { sub(/^tcp:/, "", $i); print $i }
@@ -719,7 +1029,18 @@ if bad:
         ynh_print_info "$line"
     done
 
-    ynh_print_info "Note: official 'yunohost diagnosis run ports' from this home box will likely still fail, because it probes the home ISP address, not the VPS. After DNS A points at the VPS, 'yunohost diagnosis run web --force' (and certificate issuance) is the better built-in check. You may need to ignore dnsrecords issues that compare the A record to the home WAN IP."
+    # With the full tunnel, a request from this box to diagnosis.yunohost.org
+    # should now come from the VPS public IP, so official
+    # `yunohost diagnosis run ports` is meaningful. Still also probe from the
+    # VPS above in case the tunnel is down.
+    local seen=""
+    if command -v curl >/dev/null 2>&1; then
+        seen="$(curl -4 -fsS --max-time 10 https://ip.yunohost.org 2>/dev/null | tr -d '[:space:]' || true)"
+    fi
+    if [[ -n "$seen" ]]; then
+        ynh_print_info "This box's public IPv4 (https://ip.yunohost.org) is currently ${seen}."
+    fi
+    ynh_print_info "With the full tunnel up, official 'yunohost diagnosis run ports' and 'yunohost diagnosis run web --force' from this box should see the VPS IP. nohost.me DynDNS auto-detects that address. For a custom domain, point the A record at the VPS (no AAAA)."
 }
 
 # Optional validators (echo a message to fail; echo nothing to pass).
@@ -764,4 +1085,55 @@ for chunk in raw.split(";"):
             print("Invalid port or range: %s" % tok)
             sys.exit(0)
 ' "${compy_ports:-}"
+}
+
+validate__compy_bypass_nets() {
+    python3 -c '
+import sys, ipaddress
+raw = sys.argv[1] or ""
+if not raw.strip():
+    print("Enter at least one IPv4 CIDR, or reload the default list")
+    sys.exit(0)
+for tok in raw.replace(";", ",").split(","):
+    tok = tok.strip()
+    if not tok or tok.startswith("#"):
+        continue
+    try:
+        net = ipaddress.ip_network(tok, strict=False)
+    except Exception:
+        print("Not a valid IPv4 CIDR: %s" % tok)
+        sys.exit(0)
+    if net.version != 4:
+        print("Only IPv4 CIDRs are supported in this version: %s" % tok)
+        sys.exit(0)
+    if net.prefixlen == 0:
+        print("0.0.0.0/0 cannot be excluded: that would disable the tunnel default route")
+        sys.exit(0)
+' "${compy_bypass_nets:-}"
+}
+
+run__compy_tunnel_off() {
+    _compy_paths
+    ynh_print_info "Stopping the Compy tunnel. IPv4 internet will use the home WAN again. LAN access is unchanged. The VPS is left running; public access through it will stop until you start the tunnel again."
+    compy_disable_watchdog
+    compy_stop_tunnel
+    systemctl disable --quiet "wireguard_client@${COMPY_IF}.service" 2>/dev/null || true
+    ynh_app_setting_set --key="${COMPY_IF}_atboot" --value=0
+    _compy_set compy_last_result "tunnel stopped by emergency off"
+    ynh_print_info "Tunnel stopped. Use Start the tunnel when you want to go back through the VPS (that step is verified and rolled back on failure)."
+}
+
+run__compy_tunnel_on() {
+    _compy_paths
+    [[ -f "$COMPY_CONF" ]] || ynh_die --message="There is no saved Compy tunnel config yet. Run Connect and set up the VPS first."
+    local server_ip public_ip
+    server_ip="$(_compy_setting compy_server_ip || true)"
+    public_ip="$(_compy_setting compy_public_ip || true)"
+    [[ -n "$server_ip" ]] || ynh_die --message="The VPS tunnel address is not stored yet. Run Connect and set up the VPS first."
+    ynh_print_info "Starting the Compy tunnel and verifying that this box's public IPv4 becomes the VPS address."
+    if ! compy_start_and_verify "$server_ip" "$public_ip"; then
+        ynh_die --message="Full-tunnel verification failed and the change was rolled back (this box should be using the home internet path again; LAN was not moved). ${COMPY_VERIFY_FAIL_REASON:-unknown reason}"
+    fi
+    _compy_set compy_last_result "ok: tunnel started, public IP $(_compy_setting compy_public_ip || true)"
+    ynh_print_info "Tunnel is up and verified."
 }

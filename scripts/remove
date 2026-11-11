@@ -24,7 +24,12 @@ for file in "$install_dir"/*.conf ; do
 done
 shopt -u nullglob
 
+systemctl disable --now compy-watchdog.timer 2>/dev/null || true
+systemctl stop compy-watchdog.service 2>/dev/null || true
+ynh_safe_rm "/etc/systemd/system/compy-watchdog.timer"
+ynh_safe_rm "/etc/systemd/system/compy-watchdog.service"
 ynh_safe_rm "/etc/systemd/system/wireguard_client@.service"
+systemctl daemon-reload || true
 
 # The VPS is not torn down automatically (no surprise remote changes on
 # app removal). To uninstall the gateway, run vps_setup.sh with --uninstall
