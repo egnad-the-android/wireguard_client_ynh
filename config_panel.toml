@@ -11,7 +11,7 @@ version = "1.0"
 # Panel 1: Public access (Compy) — the grandma-friendly single page
 # =====================================================================
 [compy]
-name = "1. Public access: overview and SSH key"
+name = "Public access (Compy)"
 
     [compy.intro]
     name = "How this works"
@@ -48,26 +48,23 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         icon = "refresh"
         help = "Only use this if the current key was leaked or lost. You will have to replace the key on the VPS afterwards."
 
-[compyvps]
-name = "2. VPS connection"
+    [compy.vps]
+    name = "Step 2 — VPS address (click Save at the bottom of the page)"
 
-    [compyvps.vps]
-    name = "Step 2 — VPS address (click Save at the bottom of this tab)"
-
-        [compyvps.vps.compy_vps_host]
+        [compy.vps.compy_vps_host]
         ask = "VPS IP address or hostname"
         type = "string"
         help = "Prefer the IPv4 address. This value also becomes the WireGuard Endpoint host."
         optional = false
 
-        [compyvps.vps.compy_ssh_user]
+        [compy.vps.compy_ssh_user]
         ask = "SSH user on the VPS"
         type = "string"
         default = "debian"
         help = "OVH Debian images typically use `debian` with passwordless sudo. Root login is often disabled. The user must be able to run `sudo -n` (no password) or be root."
         optional = false
 
-        [compyvps.vps.compy_ssh_port]
+        [compy.vps.compy_ssh_port]
         ask = "SSH port on the VPS"
         type = "number"
         default = 22
@@ -75,43 +72,40 @@ name = "2. VPS connection"
         max = 65535
         help = "This port is kept open on the VPS and is never forwarded to this home server."
 
-    [compyvps.vpscheck]
+    [compy.vpscheck]
     name = "Step 2b — Check the VPS connection (Save the address above first)"
 
-        [compyvps.vpscheck.compy_host_fingerprint]
+        [compy.vpscheck.compy_host_fingerprint]
         ask = "SSH host key is not pinned yet. Click Test connection."
         type = "alert"
         style = "warning"
         bind = "null"
 
-        [compyvps.vpscheck.compy_test_ssh]
+        [compy.vpscheck.compy_test_ssh]
         type = "button"
         ask = "Test connection"
         style = "info"
         icon = "plug"
         help = "Fetches the VPS SSH fingerprint (ssh-keyscan) and, if the host is already pinned, tries a non-interactive login and sudo."
 
-        [compyvps.vpscheck.compy_pin_host]
+        [compy.vpscheck.compy_pin_host]
         type = "button"
         ask = "Pin host key"
         style = "warning"
         icon = "lock"
         help = "Saves the fingerprint from the last test into this app's known_hosts file. Do this only after you have compared it with the OVH (or other) console."
 
-[compytunnel]
-name = "3. Tunnel and ports"
+    [compy.tunnel]
+    name = "Step 3 — Tunnel and ports (click Save at the bottom of the page)"
 
-    [compytunnel.tunnel]
-    name = "Step 3 — Tunnel and ports (click Save at the bottom of this tab)"
-
-        [compytunnel.tunnel.compy_wg_port]
+        [compy.tunnel.compy_wg_port]
         ask = "WireGuard UDP port on the VPS"
         type = "number"
         default = 51820
         min = 1
         max = 65535
 
-        [compytunnel.tunnel.compy_wg_subnet]
+        [compy.tunnel.compy_wg_subnet]
         ask = "WireGuard tunnel subnet"
         type = "string"
         default = "10.99.0.0/24"
@@ -119,81 +113,78 @@ name = "3. Tunnel and ports"
         pattern.regexp = '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$'
         pattern.error = "Use a CIDR like 10.99.0.0/24"
 
-        [compytunnel.tunnel.compy_ports]
+        [compy.tunnel.compy_ports]
         ask = "Ports the VPS should forward to this server"
         type = "text"
         help = """Format: tcp:25,80,443,587,993;udp:  — ranges like 8000-8010 are allowed. Prefill comes from this server's YunoHost firewall, minus the home SSH port and local-only UDP services (53, 1900, 5353, 55354). Edit freely before setup. Do not include the VPS SSH port or the WireGuard port; the setup script will refuse those."""
         # default is filled by the getter when the saved setting is empty
 
-        [compytunnel.tunnel.compy_ports_preview]
+        [compy.tunnel.compy_ports_preview]
         ask = "Port list preview will appear here."
         type = "alert"
         style = "info"
         bind = "null"
 
-        [compytunnel.tunnel.compy_bypass_nets]
+        [compy.tunnel.compy_bypass_nets]
         ask = "Networks that stay outside the tunnel"
         type = "text"
         help = """Comma-separated IPv4 CIDRs that must not go through the VPS. The default is auto-detected connected subnets plus 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, and 100.64.0.0/10 (CGNAT, including typical Starlink WAN). The WireGuard endpoint is always pinned on the home WAN automatically. Edit, then Save, before you set up or start the tunnel. Do not add 0.0.0.0/0."""
         # default is filled by the getter when the saved setting is empty
 
-    [compytunnel.portsbtn]
+    [compy.portsbtn]
     name = "Step 3b — Port list helper"
 
-        [compytunnel.portsbtn.compy_reload_ports]
+        [compy.portsbtn.compy_reload_ports]
         type = "button"
         ask = "Reload ports from the YunoHost firewall"
         style = "info"
         icon = "refresh"
 
-[compyrun]
-name = "4. Set up and status"
-
-    [compyrun.actions]
+    [compy.actions]
     name = "Step 4 — Set up and status"
 
-        [compyrun.actions.compy_setup_vps]
+        [compy.actions.compy_setup_vps]
         type = "button"
         ask = "Connect and set up the VPS"
         style = "success"
         icon = "rocket"
         help = "Requires a pinned host key. Generates the local WireGuard key if needed, runs the setup script on the VPS over SSH, writes a full-tunnel client config, brings it up, and keeps it only if handshake, tunnel ping, and https://ip.yunohost.org (VPS public IP) all succeed. Otherwise the change is rolled back."
 
-        [compyrun.actions.compy_resync_ports]
+        [compy.actions.compy_resync_ports]
         type = "button"
         ask = "Re-sync ports (v1.1)"
         style = "info"
         icon = "exchange"
         help = "Re-runs the VPS script with the current port list (idempotent). The tunnel itself is not rebuilt unless the peer key or subnet changed."
 
-        [compyrun.actions.compy_test_ports]
+        [compy.actions.compy_test_ports]
         type = "button"
         ask = "Test public ports"
         style = "info"
         icon = "stethoscope"
         help = "Pings the tunnel, shows this box's public IPv4 (https://ip.yunohost.org, which should be the VPS), and asks the YunoHost diagnosis service to probe the forwarded TCP ports. With the full tunnel up, official `yunohost diagnosis run ports` from this box should also see the VPS IP."
 
-        [compyrun.actions.compy_status]
+        [compy.actions.compy_status]
         ask = "The tunnel has not been set up yet."
         type = "alert"
         style = "info"
         bind = "null"
 
-        [compyrun.actions.compy_tunnel_off]
+        [compy.actions.compy_tunnel_off]
         type = "button"
         ask = "Turn tunnel off (emergency)"
         style = "danger"
         icon = "power-off"
         help = "Stops the Compy tunnel immediately so IPv4 internet uses the home WAN again. LAN and LAN SSH stay reachable. The VPS is left as-is. Use this if you lose connectivity or the VPS is down (the watchdog also does this after about 3 minutes without a handshake)."
 
-        [compyrun.actions.compy_tunnel_on]
+        [compy.actions.compy_tunnel_on]
         type = "button"
         ask = "Start the tunnel"
         style = "success"
         icon = "play"
         help = "Brings the saved full-tunnel config up and keeps it only if verification succeeds (handshake, tunnel ping, and ip.yunohost.org seeing the VPS IP)."
 
-        [compyrun.actions.compy_dns_hint]
+        [compy.actions.compy_dns_hint]
         ask = """After the tunnel is up, YunoHost sees the VPS public IPv4. A nohost.me (or other YunoHost DynDNS) domain will auto-update to that address via ip.yunohost.org — you do not need `yunohost dyndns update --ipv4` or to remove a cron job. For a custom domain, point the A record at the VPS IPv4 and wait for it to propagate. Do not publish an AAAA record in this version (IPv6 internet is disabled while the tunnel is up; set YunoHost DNS exposure to IPv4 only). Set a PTR/rDNS record for the VPS IPv4 in the OVH (or other) panel so outbound mail from this box is accepted. If the VPS dies, this box loses internet until the watchdog takes the tunnel down or you click Turn tunnel off; all bandwidth counts through the VPS."""
         type = "alert"
         style = "warning"
