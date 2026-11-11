@@ -19,12 +19,14 @@ name = "Public access (Compy)"
         [compy.intro.compy_intro]
         ask = """This page turns a cheap Debian VPS (for example an OVH VPS) into a public doorway for this YunoHost server, without opening any port on your home internet box.
 
+After setup, ALL IPv4 internet traffic from this server goes through the VPS, except local networks (your LAN, RFC1918, and Starlink CGNAT). YunoHost will then see the VPS public IP, so diagnosis, Let's Encrypt, nohost.me DynDNS, and outbound mail all use that address. LAN access and LAN SSH stay on the home network.
+
 1. Copy the SSH public key below and add it in the OVH (or other) panel for the VPS, as an authorized key for the SSH user (often `debian` on OVH Debian images; root login may be disabled).
 2. Enter the VPS IP address, SSH user and SSH port. Click Test connection, compare the fingerprint with the one in the OVH console, then click Pin host key.
-3. Review the port list (pre-filled from this server's YunoHost firewall). These are the ports the VPS will forward to this server. SSH on the VPS is never forwarded.
-4. Click Connect and set up the VPS. This server will generate a WireGuard key, install WireGuard on the VPS over SSH, start the tunnel, and keep all HTTPS certificates on this YunoHost box.
+3. Review the port list (pre-filled from this server's YunoHost firewall) and the list of networks that stay outside the tunnel. SSH on the VPS is never forwarded.
+4. Click Connect and set up the VPS. This server will generate a WireGuard key, install WireGuard on the VPS over SSH, start a full-tunnel, and keep all HTTPS certificates on this YunoHost box. If the tunnel cannot be verified, the change is rolled back automatically.
 
-Your DNS A record for the domain must later point at the VPS IPv4 address. Do not publish an AAAA record in this version."""
+The VPS is a single point of failure: if it goes down, this box loses internet until the watchdog (about 3 minutes) takes the tunnel down, or you click Turn tunnel off. All bandwidth then counts through the VPS (OVH US standard region is typically unmetered 500 Mbps). IPv6 internet is disabled while the tunnel is up (no AAAA records in this version)."""
         type = "alert"
         style = "info"
         bind = "null"
@@ -123,6 +125,12 @@ Your DNS A record for the domain must later point at the VPS IPv4 address. Do no
         style = "info"
         bind = "null"
 
+        [compy.tunnel.compy_bypass_nets]
+        ask = "Networks that stay outside the tunnel"
+        type = "text"
+        help = """Comma-separated IPv4 CIDRs that must not go through the VPS. The default is auto-detected connected subnets plus 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, and 100.64.0.0/10 (CGNAT, including typical Starlink WAN). The WireGuard endpoint is always pinned on the home WAN automatically. Edit, then Save, before you set up or start the tunnel. Do not add 0.0.0.0/0."""
+        # default is filled by the getter when the saved setting is empty
+
         [compy.tunnel.compy_reload_ports]
         type = "button"
         ask = "Reload ports from the YunoHost firewall"
@@ -137,7 +145,7 @@ Your DNS A record for the domain must later point at the VPS IPv4 address. Do no
         ask = "Connect and set up the VPS"
         style = "success"
         icon = "rocket"
-        help = "Requires a pinned host key. Generates the local WireGuard key if needed, runs the setup script on the VPS over SSH, writes the client config, starts the tunnel, and checks the handshake."
+        help = "Requires a pinned host key. Generates the local WireGuard key if needed, runs the setup script on the VPS over SSH, writes a full-tunnel client config, brings it up, and keeps it only if handshake, tunnel ping, and https://ip.yunohost.org (VPS public IP) all succeed. Otherwise the change is rolled back."
 
         [compy.actions.compy_resync_ports]
         type = "button"
@@ -151,7 +159,7 @@ Your DNS A record for the domain must later point at the VPS IPv4 address. Do no
         ask = "Test public ports"
         style = "info"
         icon = "stethoscope"
-        help = "Asks the YunoHost diagnosis service to probe the VPS public IP (the request is sent from the VPS, so the probe hits the gateway). Also pings the tunnel and shows the latest handshake. Official `yunohost diagnosis run ports` from this home box is not sufficient; see the report."
+        help = "Pings the tunnel, shows this box's public IPv4 (https://ip.yunohost.org, which should be the VPS), and asks the YunoHost diagnosis service to probe the forwarded TCP ports. With the full tunnel up, official `yunohost diagnosis run ports` from this box should also see the VPS IP."
 
         [compy.actions.compy_status]
         ask = "The tunnel has not been set up yet."
@@ -159,8 +167,22 @@ Your DNS A record for the domain must later point at the VPS IPv4 address. Do no
         style = "info"
         bind = "null"
 
+        [compy.actions.compy_tunnel_off]
+        type = "button"
+        ask = "Turn tunnel off (emergency)"
+        style = "danger"
+        icon = "power-off"
+        help = "Stops the Compy tunnel immediately so IPv4 internet uses the home WAN again. LAN and LAN SSH stay reachable. The VPS is left as-is. Use this if you lose connectivity or the VPS is down (the watchdog also does this after about 3 minutes without a handshake)."
+
+        [compy.actions.compy_tunnel_on]
+        type = "button"
+        ask = "Start the tunnel"
+        style = "success"
+        icon = "play"
+        help = "Brings the saved full-tunnel config up and keeps it only if verification succeeds (handshake, tunnel ping, and ip.yunohost.org seeing the VPS IP)."
+
         [compy.actions.compy_dns_hint]
-        ask = """After the tunnel is up, point the domain's DNS A record at the VPS IPv4 address and wait for it to propagate. Do not publish an AAAA record in this version (IPv6 forwarding is not installed). If this box has IPv6, set YunoHost DNS exposure to IPv4 only so diagnosis and Let's Encrypt do not advertise a home IPv6 address. Outbound mail still leaves through your home ISP in v1; rDNS/PTR on the VPS only helps once outbound SMTP is also routed via the VPS (later version)."""
+        ask = """After the tunnel is up, YunoHost sees the VPS public IPv4. A nohost.me (or other YunoHost DynDNS) domain will auto-update to that address via ip.yunohost.org — you do not need `yunohost dyndns update --ipv4` or to remove a cron job. For a custom domain, point the A record at the VPS IPv4 and wait for it to propagate. Do not publish an AAAA record in this version (IPv6 internet is disabled while the tunnel is up; set YunoHost DNS exposure to IPv4 only). Set a PTR/rDNS record for the VPS IPv4 in the OVH (or other) panel so outbound mail from this box is accepted. If the VPS dies, this box loses internet until the watchdog takes the tunnel down or you click Turn tunnel off; all bandwidth counts through the VPS."""
         type = "alert"
         style = "warning"
         bind = "null"

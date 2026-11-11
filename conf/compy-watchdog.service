@@ -1,0 +1,9 @@
+[Unit]
+Description=Compy WireGuard tunnel watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=__INSTALL_DIR__/compy_watchdog.sh
