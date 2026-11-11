@@ -76,8 +76,8 @@ ynh_app_config_apply() {
     # GENERATE INTERFACE ARRAYS
     #=================================================
     # Convert comma-separated list into a Bash array
-    readarray -td, interfaces_array < <(printf '%s' "$interfaces")
-    readarray -td, old_interfaces_array < <(printf '%s' "${old[interfaces]}")
+    readarray -td, interfaces_array < <(printf '%s' "${interfaces-}")
+    readarray -td, old_interfaces_array < <(printf '%s' "${old[interfaces]-}")
 
     # Drop empty elements left by an empty setting or a trailing comma/newline
     _compy_drop_empty() {
@@ -145,7 +145,7 @@ ynh_app_config_apply() {
     ynh_print_info "Added interfaces: ${added_interfaces_array[*]-}"
     ynh_print_info "Removed interfaces: ${removed_interfaces_array[*]-}"
 
-    if [ "${changed[interfaces]}" == "true" ];
+    if [ "${changed[interfaces]-}" == "true" ];
     then
 
     #=================================================
@@ -192,7 +192,7 @@ ynh_app_config_apply() {
     #=================================================
     # HANDLING CONFIGURATION FILES
     #=================================================
-    if [ "${changed[$i_conf]}" == "true" ] && [ -f "$install_dir/$i.conf" ];
+    if [ "${changed[$i_conf]-}" == "true" ] && [ -f "$install_dir/$i.conf" ];
     then
         # Uploaded confs run as root via wg-quick; keep them root-only.
         chmod 600 "$install_dir/$i.conf"
@@ -204,7 +204,7 @@ ynh_app_config_apply() {
         [ "${!i_atboot}" -eq 1 ] && systemctl enable --quiet "wireguard_client@$i.service"
         # Integrate service in YunoHost
         yunohost service add "wireguard_client@$i" --description="WireGuard VPN Client $i" --test_status="wg | grep \"interface: $i\" -q"
-    elif [ "${changed[$i_conf]}" == "true" ] && [ ! -f "$install_dir/$i.conf" ];
+    elif [ "${changed[$i_conf]-}" == "true" ] && [ ! -f "$install_dir/$i.conf" ];
     then
         systemctl disable --quiet --now "wireguard_client@$i.service"
         # If, somehow, the interface is still running,
@@ -224,11 +224,11 @@ ynh_app_config_apply() {
     # HANDLING START AT BOOT CHANGES
     #=================================================
     # In the context of YunoHost config panels booleans, truthy is 1
-    if [ "${changed[$i_atboot]}" == "true" ] && [ "${!i_atboot}" -eq 1 ];
+    if [ "${changed[$i_atboot]-}" == "true" ] && [ "${!i_atboot}" -eq 1 ];
     then
         systemctl enable --quiet "wireguard_client@$i.service"
         ynh_print_info "$i interface will automatically start upon server boot"
-    elif [ "${changed[$i_atboot]}" == "true" ] && [ "${!i_atboot}" -eq 0 ];
+    elif [ "${changed[$i_atboot]-}" == "true" ] && [ "${!i_atboot}" -eq 0 ];
     then
         systemctl disable --quiet "wireguard_client@$i.service"
         ynh_print_info "$i interface will not automatically start upon server boot"
