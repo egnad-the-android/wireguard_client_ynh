@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostDown helper for the Compy full-tunnel interface (called by wg-quick).
+# PostDown helper for The Gate full-tunnel interface (called by wg-quick).
 # Removes only the routes this package added in PostUp.
 #
 # Usage: compy_route_down.sh <interface>

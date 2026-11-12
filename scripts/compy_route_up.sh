@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostUp helper for the Compy full-tunnel interface (called by wg-quick).
+# PostUp helper for The Gate full-tunnel interface (called by wg-quick).
 # Adds more-specific routes in table main for the WireGuard endpoint and for
 # "networks that stay outside the tunnel" (LAN, RFC1918, CGNAT, …).
 # wg-quick's suppress_prefixlength 0 policy already keeps connected routes

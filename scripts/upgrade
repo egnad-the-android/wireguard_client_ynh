@@ -15,7 +15,7 @@ source /usr/share/yunohost/helpers
 ynh_script_progression "Ensuring downward compatibility..."
 
 # Do not copy the live /etc/yunohost/apps/$app/config_panel.toml over the
-# package copy. That hid new panel pages (including [compy]) on upgrade.
+# package copy. That hid new panel pages (including The Gate page) on upgrade.
 # Rebuild the live panel from the current template plus any extra interfaces.
 compy_ensure_settings
 compy_install_files
@@ -37,3 +37,4 @@ systemctl daemon-reload
 #=================================================
 
 ynh_script_progression "Upgrade of $app completed"
+ynh_print_info "The Gate: if the tunnel is already up, open The Gate page and click Re-sync ports so the VPS applies the ICMP ping fix. The live tunnel config is not rewritten. If an old action log is stuck, run: sudo systemctl restart yunohost-api"

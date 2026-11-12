@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Compy Level 2 — extract the ports that should be public from a YunoHost box.
-# Untested on a real YunoHost server. Intended to run on the home box, as root.
+# The Gate — extract the ports that should be public from a YunoHost box.
+# Intended to run on the home Compy (YunoHost server), as root.
 #
 # YunoHost 12+ stores the firewall as /etc/yunohost/firewall.yml with this
 # shape (verified against YunoHost/yunohost dev src/firewall.py and
@@ -36,8 +36,8 @@
 #
 # IMPORTANT: "open" on the home firewall only means YunoHost's nftables on
 # this box accepts the port. It does NOT mean the port is forwarded on the
-# ISP router or reachable from the internet. That is the gap this Compy
-# gateway fills.
+# ISP router or reachable from the internet. That is the gap The Gate
+# fills.
 #
 # Default exclusions (safe list):
 #   TCP: the home SSH port (sshd_config or 22), and 53

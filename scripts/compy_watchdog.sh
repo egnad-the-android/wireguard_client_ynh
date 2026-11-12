@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# If the Compy full tunnel is up but has no recent handshake, take it down so
+# If The Gate full tunnel is up but has no recent handshake, take it down so
 # this box can reach the internet through the home WAN again. LAN routes are
 # never taken over by the tunnel (see compy_route_up.sh); this only restores
 # the IPv4 default route. The unit is left disabled-at-boot as it was; the
@@ -68,7 +68,7 @@ else
     exit 0
 fi
 
-log "Taking the Compy tunnel down: $reason. Internet will use the home WAN until you start the tunnel again from the Public access panel. LAN access is unchanged."
+log "Taking The Gate tunnel down: $reason. Internet will use the home WAN until you start the tunnel again from The Gate page. LAN access is unchanged."
 printf '%s\n' "$reason" >"$FLAG"
 chmod 600 "$FLAG" 2>/dev/null || true
 

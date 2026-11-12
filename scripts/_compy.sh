@@ -1,7 +1,10 @@
 #!/bin/bash
-# Compy Level 2 helpers for wireguard_client_ynh.
+# The Gate helpers for this fork of wireguard_client_ynh.
 # Sourced from scripts/config, scripts/install, and scripts/upgrade.
-# Untested on a real YunoHost server.
+#
+# Product name: The Gate (the VPS gateway to your Compy).
+# The app id, interface name (`compy`), setting keys, and install paths
+# are kept so a live install upgrades in place.
 #
 # Paths (all under the app install dir, already backed up by scripts/backup):
 #   $install_dir/ssh/id_ed25519          client SSH key (root 600)
@@ -139,6 +142,8 @@ compy_ssh_base_opts() {
         -o "ServerAliveInterval=5"
         -o "ServerAliveCountMax=12"
         -o "ExitOnForwardFailure=yes"
+        -o "RequestTTY=no"
+        -o "KbdInteractiveAuthentication=no"
         -o "UserKnownHostsFile=$COMPY_KNOWN_HOSTS"
     )
 }
@@ -152,9 +157,13 @@ compy_keyscan() {
     tmp="$(mktemp)"
     # -H hashes hostnames; we want the raw line so we can pin exactly.
     # IPv4 first: -4. Timeout 10s. Types: ed25519, rsa, ecdsa.
-    if ! ssh-keyscan -4 -T 10 -p "$COMPY_SPORT" -t "ed25519,rsa,ecdsa" "$COMPY_HOST" >"$tmp" 2>/dev/null; then
+    # -T 10 is ssh-keyscan's own timeout; the outer timeout is a hard cap
+    # so a stuck keyscan cannot leave a YunoHost action log open.
+    if ! timeout --signal=TERM --kill-after=5 20 \
+            ssh-keyscan -4 -T 10 -p "$COMPY_SPORT" -t "ed25519,rsa,ecdsa" "$COMPY_HOST" \
+            >"$tmp" 2>/dev/null </dev/null; then
         rm -f "$tmp"
-        ynh_die --message="Could not reach ${COMPY_HOST} port ${COMPY_SPORT} with ssh-keyscan. Check the IP, the SSH port, and the OVH (or other) firewall."
+        ynh_die --message="Could not reach ${COMPY_HOST} port ${COMPY_SPORT} with ssh-keyscan. Check the IP, the SSH port, and the OVH (or other) firewall. If a log entry stays open, see Tools > Logs or run: sudo systemctl restart yunohost-api"
     fi
     if [[ ! -s "$tmp" ]]; then
         rm -f "$tmp"
@@ -206,25 +215,42 @@ compy_pin_pending_host() {
 
 # Run a remote command as the configured user, with sudo -n when not root.
 # Host key must already be pinned (StrictHostKeyChecking=yes).
+# The command is always run under `bash -c` so callers can pass shell
+# constructs (pipes, if/then). stdin is not forwarded (ssh -n and
+# </dev/null): a YunoHost action's stdin can stay open and would
+# otherwise hang the SSH session and leave an operation log stuck.
+# A hard `timeout` is a last resort if the VPS stops responding.
+# Set COMPY_SSH_TIMEOUT (seconds) to override the default (90).
+# Returns 124 on timeout. Callers should treat that as a failure and
+# use ynh_die with a plain message; details are in Tools > Logs.
 compy_ssh() {
     _compy_paths
     _compy_require_host
     compy_ensure_ssh_key
     compy_ssh_base_opts
-    compy_host_is_pinned || ynh_die --message="The VPS SSH host key is not pinned yet. Click Test connection, check the fingerprint against the provider console, then click Pin host key."
+    compy_host_is_pinned || ynh_die --message="The VPS SSH host key is not pinned yet. Click Test connection, check the fingerprint against the provider console, then click Pin host key. If a log entry stays open, see Tools > Logs or run: sudo systemctl restart yunohost-api"
     local remote_cmd="$1"
-    local sudo_cmd
+    local timeout_s="${COMPY_SSH_TIMEOUT:-90}"
+    local remote
+    # printf %q so quotes and semicolons in the command stay one argv.
     if [[ "$COMPY_USER" == "root" ]]; then
-        sudo_cmd="$remote_cmd"
+        remote="bash -c $(printf '%q' "$remote_cmd")"
     else
         # -n: never prompt for a password. Fail clearly if sudo is not passwordless.
-        sudo_cmd="sudo -n -- $remote_cmd"
+        remote="sudo -n -- bash -c $(printf '%q' "$remote_cmd")"
     fi
-    # The remaining positional args after $1 are not used; stdin is passed through.
-    ssh "${COMPY_SSH_OPTS[@]}" \
+    local rc=0
+    timeout --signal=TERM --kill-after=10 "$timeout_s" \
+        ssh -n "${COMPY_SSH_OPTS[@]}" \
         -o "StrictHostKeyChecking=yes" \
         "${COMPY_USER}@${COMPY_HOST}" \
-        "$sudo_cmd"
+        "$remote" \
+        </dev/null || rc=$?
+    if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+        ynh_print_err "SSH to ${COMPY_USER}@${COMPY_HOST} timed out after ${timeout_s}s. See Tools > Logs for details. If a log entry stays open, run: sudo systemctl restart yunohost-api"
+        return 124
+    fi
+    return "$rc"
 }
 
 compy_ssh_script() {
@@ -234,8 +260,8 @@ compy_ssh_script() {
     _compy_require_host
     compy_ensure_ssh_key
     compy_ssh_base_opts
-    compy_host_is_pinned || ynh_die --message="The VPS SSH host key is not pinned yet. Click Test connection, check the fingerprint, then click Pin host key."
-    [[ -f "$COMPY_VPS_SCRIPT" ]] || ynh_die --message="The VPS setup script was not found at $COMPY_VPS_SCRIPT. Reinstall or upgrade the app so conf/vps_setup.sh is shipped."
+    compy_host_is_pinned || ynh_die --message="The VPS SSH host key is not pinned yet. Click Test connection, check the fingerprint, then click Pin host key. If a log entry stays open, see Tools > Logs or run: sudo systemctl restart yunohost-api"
+    [[ -f "$COMPY_VPS_SCRIPT" ]] || ynh_die --message="The VPS setup script was not found at $COMPY_VPS_SCRIPT. Reinstall or upgrade the app so conf/vps_setup.sh is shipped. See Tools > Logs for details."
     # ssh(1) joins the remote command into a string that the remote shell
     # evaluates. A port list contains ";" and would otherwise be split.
     local quoted="" arg
@@ -248,12 +274,22 @@ compy_ssh_script() {
     else
         remote="sudo -n -- bash -s --${quoted}"
     fi
-    # apt on a fresh VPS can take several minutes.
-    timeout 600 ssh "${COMPY_SSH_OPTS[@]}" \
+    # apt on a fresh VPS can take several minutes. 600s is the hard cap
+    # so a stalled install cannot leave a YunoHost action log open.
+    # stdin is the setup script (do not use ssh -n here).
+    local timeout_s="${COMPY_SSH_SCRIPT_TIMEOUT:-600}"
+    local rc=0
+    timeout --signal=TERM --kill-after=15 "$timeout_s" \
+        ssh "${COMPY_SSH_OPTS[@]}" \
         -o "StrictHostKeyChecking=yes" \
         "${COMPY_USER}@${COMPY_HOST}" \
         "$remote" \
-        <"$COMPY_VPS_SCRIPT"
+        <"$COMPY_VPS_SCRIPT" || rc=$?
+    if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+        ynh_print_err "The VPS setup script timed out after ${timeout_s}s. See Tools > Logs for details. If a log entry stays open, run: sudo systemctl restart yunohost-api"
+        return 124
+    fi
+    return "$rc"
 }
 
 # ---------------------------- WG client conf ----------------------------
@@ -329,7 +365,9 @@ compy_current_bypass_nets() {
 
 compy_resolve_ipv4() {
     # Resolve a host or pass through an IPv4 address. Empty on failure.
-    python3 -c '
+    # getaddrinfo has no native timeout; wrap the process so DNS cannot hang
+    # a getter or an action (and leave a YunoHost log open).
+    timeout --signal=TERM --kill-after=2 10 python3 -c '
 import socket, sys
 host = (sys.argv[1] or "").strip()
 if not host:
@@ -338,7 +376,7 @@ try:
     print(socket.getaddrinfo(host, None, socket.AF_INET)[0][4][0])
 except Exception:
     sys.exit(0)
-' "$1"
+' "$1" || true
 }
 
 compy_save_underlay_and_endpoint() {
@@ -413,7 +451,7 @@ compy_write_client_conf() {
     umask 077
     cat >"$COMPY_CONF" <<EOF
 [Interface]
-# Generated by Compy Level 2 (full-tunnel IPv4). Do not set DNS= or Table=off.
+# Generated by The Gate (full-tunnel IPv4). Do not set DNS= or Table=off.
 # AllowedIPs 0.0.0.0/0 + wg-quick Table=auto keeps connected LAN/underlay
 # routes via suppress_prefixlength 0. PostUp adds the bypass-list routes
 # and blackholes IPv6 default egress. Tunnel subnet is ${subnet}.
@@ -490,7 +528,7 @@ compy_commit_tunnel() {
     ynh_app_setting_set --key="compy_full_tunnel" --value=1
     systemctl enable --quiet "wireguard_client@${COMPY_IF}.service" || true
     yunohost service add "wireguard_client@${COMPY_IF}" \
-        --description="WireGuard VPN Client ${COMPY_IF} (Compy public access, full tunnel)" \
+        --description="The Gate tunnel (WireGuard client ${COMPY_IF}, full tunnel)" \
         --test_status="wg | grep \"interface: ${COMPY_IF}\" -q" 2>/dev/null || true
     rm -f "$install_dir/compy_watchdog_tripped" "${COMPY_CONF}.bak"
     compy_enable_watchdog
@@ -595,7 +633,7 @@ compy_start_and_verify() {
     if [[ $rc -ne 0 ]]; then
         _compy_set compy_last_result "fail: $reason"
         compy_rollback_tunnel "$reason"
-        ynh_print_err "Full-tunnel verification failed and the change was rolled back (this box should be using the home internet path again; LAN was not moved). ${reason}"
+        ynh_print_err "Full-tunnel verification failed and the change was rolled back (your Compy should be using the home internet path again; LAN was not moved). ${reason}"
         COMPY_VERIFY_FAIL_REASON="$reason"
         return 1
     fi
@@ -603,7 +641,6 @@ compy_start_and_verify() {
     return 0
 }
 
-# ---------------------------- result parsing ----------------------------
 # ---------------------------- result parsing ----------------------------
 
 compy_parse_result() {
@@ -637,13 +674,17 @@ compy_run_vps_setup() {
     if ! grep -q '^COMPY_RESULT=' "$out"; then
         _compy_set compy_last_result "fail: no COMPY_RESULT in script output (ssh rc=$rc)"
         tail -n 20 "$out" "${out}.err" >/tmp/compy-setup-tail 2>/dev/null || true
-        ynh_die --message="The VPS script did not return a COMPY_RESULT line (ssh exit $rc). The VPS may have refused sudo, apt may have failed, or the SSH connection dropped. See the action log."
+        local hint="The VPS may have refused sudo, apt may have failed, or the SSH connection dropped."
+        if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+            hint="The SSH session timed out. See Tools > Logs. If a log entry stays open, run: sudo systemctl restart yunohost-api"
+        fi
+        ynh_die --message="The VPS script did not return a COMPY_RESULT line (ssh exit $rc). $hint"
     fi
     compy_parse_result "$out"
     rm -f "$out" "${out}.err"
     if [[ "$COMPY_RESULT_STATUS" != "ok" || "$rc" -ne 0 ]]; then
         _compy_set compy_last_result "fail: ${COMPY_RESULT_ERROR:-unknown} (rc=$rc)"
-        ynh_die --message="VPS setup failed: ${COMPY_RESULT_ERROR:-unknown error (exit $rc)}"
+        ynh_die --message="VPS setup failed: ${COMPY_RESULT_ERROR:-unknown error (exit $rc)}. See Tools > Logs for details."
     fi
     _compy_set compy_last_result "ok"
     _compy_set compy_server_pubkey "$COMPY_RESULT_PUBKEY"
@@ -717,7 +758,7 @@ get__compy_ports_preview() {
 style: info
 ask:
   en: |
-    Will be forwarded from the VPS public IP to this server's WireGuard address:
+    Will be forwarded from the VPS public IP to your Compy's WireGuard address:
     \`${ports}\`
 
     The VPS SSH port and the WireGuard UDP port are never forwarded. The home SSH port is left out of the default list on purpose.
@@ -734,11 +775,21 @@ get__compy_bypass_nets() {
     _compy_return_value "$saved"
 }
 
+# WireGuard's operstate is often "unknown"; use the ip-link flags instead.
+_compy_link_is_up() {
+    local ifname="${1:-$COMPY_IF}"
+    local flags
+    flags="$(ip -o link show dev "$ifname" 2>/dev/null || true)"
+    [[ -n "$flags" ]] || return 1
+    # Flags look like: 4: compy: <POINTOPOINT,NOARP,UP,LOWER_UP> mtu 1420 ...
+    [[ "$flags" == *"<UP,"* || "$flags" == *",UP,"* || "$flags" == *",UP>"* || "$flags" == *"<UP>"* ]]
+}
+
 get__compy_status() {
     _compy_paths
     local style="info"
-    local body="The tunnel has not been set up yet."
-    local last handshake iface_state ping_s="" mode_s="" ip_s="" wd_s=""
+    local body="The Gate tunnel has not been set up yet."
+    local last handshake ping_s="" mode_s="" ip_s="" wd_s=""
     last="$(_compy_setting compy_last_result || true)"
     local server_ip public_ip
     server_ip="$(_compy_setting compy_server_ip || true)"
@@ -754,24 +805,30 @@ get__compy_status() {
 
     if [[ -f "$install_dir/compy_watchdog_tripped" ]]; then
         style="warning"
-        wd_s=" The watchdog stopped the tunnel ($(tr -d '\n' <"$install_dir/compy_watchdog_tripped")). Internet should be back on the home WAN. Start the tunnel again after the VPS is healthy."
+        wd_s=" The watchdog stopped The Gate tunnel ($(tr -d '\n' <"$install_dir/compy_watchdog_tripped")). Internet should be back on the home WAN. Start the tunnel again after the VPS is healthy."
     fi
 
     if [[ -f "$COMPY_CONF" ]] && wg show "$COMPY_IF" >/dev/null 2>&1; then
         handshake="$(wg show "$COMPY_IF" latest-handshakes 2>/dev/null | awk '{print $2; exit}')"
-        iface_state="$(cat /sys/class/net/${COMPY_IF}/operstate 2>/dev/null || echo unknown)"
+        local link_s="down"
+        if _compy_link_is_up "$COMPY_IF"; then
+            link_s="up"
+        fi
         if [[ "$handshake" =~ ^[0-9]+$ ]] && ((handshake > 0)); then
             local ago=$(( $(date +%s) - handshake ))
             if ((ago < 180)); then
                 style="success"
-                body="Tunnel ${COMPY_IF} is up. Last handshake ${ago}s ago. Interface state: ${iface_state}."
+                body="The Gate tunnel (${COMPY_IF}) is ${link_s}. Last handshake ${ago}s ago."
             else
                 style="warning"
-                body="Tunnel ${COMPY_IF} exists but the last handshake was ${ago}s ago (WireGuard usually refreshes every ~25s with PersistentKeepalive). The VPS may be unreachable; if this lasts a few minutes the watchdog will take the tunnel down to restore home internet."
+                body="The Gate tunnel (${COMPY_IF}) is ${link_s}, but the last handshake was ${ago}s ago (WireGuard usually refreshes every ~25s with PersistentKeepalive). The VPS may be unreachable; if this lasts a few minutes the watchdog will take the tunnel down to restore home internet."
             fi
+        elif [[ "$link_s" == "up" ]]; then
+            style="warning"
+            body="The Gate tunnel (${COMPY_IF}) is up, but there is no handshake yet."
         else
             style="warning"
-            body="Tunnel ${COMPY_IF} is configured but there is no handshake yet."
+            body="The Gate tunnel (${COMPY_IF}) is configured but the interface is down."
         fi
         if [[ -n "$server_ip" ]] && ping -c 1 -W 2 "$server_ip" >/dev/null 2>&1; then
             ping_s=" Ping to ${server_ip} succeeded."
@@ -784,7 +841,7 @@ get__compy_status() {
             body="${body}${ip_s}"
         fi
     else
-        body="The tunnel has not been set up yet, or it is stopped.${mode_s}${wd_s}"
+        body="The Gate tunnel has not been set up yet, or it is stopped.${mode_s}${wd_s}"
     fi
     if [[ -n "$last" ]]; then
         body="${body}
@@ -828,14 +885,14 @@ run__compy_test_ssh() {
 
     if compy_host_is_pinned; then
         ynh_print_info "This host is already pinned. Trying a non-interactive login..."
-        local probe
-        if [[ "$COMPY_USER" == "root" ]]; then
-            probe="id -u && . /etc/os-release && echo COMPY_OS=\$ID \$VERSION_ID"
-        else
-            probe="sudo -n -- bash -c 'id -u && . /etc/os-release && echo COMPY_OS=\$ID \$VERSION_ID'"
-        fi
-        if ! output="$(compy_ssh "$probe")"; then
-            ynh_die --message="Host key is pinned but login or passwordless sudo failed. On OVH Debian, the user is often 'debian' and must have sudo NOPASSWD (cloud-init usually sets this when you install the SSH key). Root login may be disabled."
+        # compy_ssh already wraps this in `sudo -n bash -c` (or bash -c as root).
+        local probe="id -u && . /etc/os-release && echo COMPY_OS=\$ID \$VERSION_ID"
+        local output rc=0
+        output="$(compy_ssh "$probe")" || rc=$?
+        if [[ $rc -eq 124 ]]; then
+            ynh_die --message="SSH to the VPS timed out. See Tools > Logs for details. If a log entry stays open, run: sudo systemctl restart yunohost-api"
+        elif [[ $rc -ne 0 ]]; then
+            ynh_die --message="Host key is pinned but login or passwordless sudo failed. On OVH Debian, the user is often 'debian' and must have sudo NOPASSWD (cloud-init usually sets this when you install the SSH key). Root login may be disabled. See Tools > Logs for details."
         fi
         ynh_print_info "Login and sudo succeeded. Remote: $output"
     fi
@@ -870,7 +927,7 @@ run__compy_setup_vps() {
     peer_pub="$(tr -d '\n' <"$COMPY_WG_PUB")"
     _compy_is_wg_key "$peer_pub" || ynh_die --message="Local WireGuard public key is missing or invalid."
 
-    ynh_print_info "Connecting to ${COMPY_USER}@${COMPY_HOST}:${COMPY_SPORT} and running the VPS setup script. This can take a few minutes on a fresh Debian image."
+    ynh_print_info "Connecting to ${COMPY_USER}@${COMPY_HOST}:${COMPY_SPORT} and running The Gate setup script on the VPS. This can take a few minutes on a fresh Debian image."
     compy_run_vps_setup \
         --peer-pubkey "$peer_pub" \
         --ports "$ports" \
@@ -893,15 +950,21 @@ run__compy_setup_vps() {
     ynh_print_info "VPS is ready. Server public key: ${COMPY_RESULT_PUBKEY}. Writing the full-tunnel client config, bringing it up, and verifying that ip.yunohost.org sees the VPS. If that fails, the change is rolled back."
     compy_write_client_conf "$COMPY_RESULT_PUBKEY" "$COMPY_HOST" "$ep_port" "$server_ip" "$peer_ip" "$prefixlen" "$subnet"
     if ! compy_start_and_verify "$server_ip" "$public_ip"; then
-        ynh_die --message="Full-tunnel verification failed and the change was rolled back (this box should be using the home internet path again; LAN was not moved). The VPS still SNATs inbound DNATed traffic, so an older split-tunnel config keeps working. ${COMPY_VERIFY_FAIL_REASON:-unknown reason}"
+        ynh_die --message="Full-tunnel verification failed and the change was rolled back (your Compy should be using the home internet path again; LAN was not moved). The VPS still SNATs inbound DNATed traffic, so an older split-tunnel config keeps working. ${COMPY_VERIFY_FAIL_REASON:-unknown reason} See Tools > Logs for details."
     fi
     # Home is now a verified full tunnel: drop inbound SNAT so YunoHost sees real client IPs.
-    ynh_print_info "Tunnel verified. Updating the VPS firewall so visitors' real IPs are visible on this box..."
-    if ! compy_run_vps_setup         --peer-pubkey "$peer_pub"         --ports "$ports"         --wg-port "$wg_port"         --ssh-port "$COMPY_SPORT"         --wg-subnet "$wg_subnet"         --no-dnat-snat; then
-        ynh_print_err "The tunnel is up, but the VPS could not drop inbound SNAT. Visitor IPs may still appear as the gateway address. You can retry Re-sync ports later."
+    ynh_print_info "Tunnel verified. Updating the VPS firewall so visitors' real IPs are visible on your Compy..."
+    if ! compy_run_vps_setup \
+        --peer-pubkey "$peer_pub" \
+        --ports "$ports" \
+        --wg-port "$wg_port" \
+        --ssh-port "$COMPY_SPORT" \
+        --wg-subnet "$wg_subnet" \
+        --no-dnat-snat; then
+        ynh_print_err "The Gate tunnel is up, but the VPS could not drop inbound SNAT. Visitor IPs may still appear as the gateway address. You can retry Re-sync ports later. See Tools > Logs for details."
     fi
     _compy_set compy_last_result "ok: full tunnel, public IP $(_compy_setting compy_public_ip || true)"
-    ynh_print_info "Done. All IPv4 internet from this box now leaves through ${COMPY_HOST}. nohost.me DynDNS will auto-detect the VPS IP (no manual dyndns update, no removecron). For a custom domain, point the A record at ${COMPY_HOST} and do not publish an AAAA record. Set a PTR/rDNS record for the VPS in the OVH panel so outbound mail is accepted. If the VPS dies, this box loses internet until the watchdog (about 3 minutes) takes the tunnel down or you click Turn tunnel off; LAN and LAN SSH stay reachable."
+    ynh_print_info "Done. All IPv4 internet from your Compy now leaves through ${COMPY_HOST}. nohost.me DynDNS will auto-detect the VPS IP (no manual dyndns update, no removecron). For a custom domain, point the A record at ${COMPY_HOST} and do not publish an AAAA record. Set a PTR/rDNS record for the VPS in the OVH panel so outbound mail is accepted. If the VPS dies, your Compy loses internet until the watchdog (about 3 minutes) takes the tunnel down or you click Turn tunnel off; LAN and LAN SSH stay reachable."
 }
 
 run__compy_resync_ports() {
@@ -1001,9 +1064,12 @@ EOF
     # demand (slow but rare) or use curl. Prefer curl if present.
     local probe_cmd
     probe_cmd="if command -v curl >/dev/null; then curl -fsS --max-time 45 -X POST https://${COMPY_DIAGNOSIS_SERVER}/check-ports -H 'Content-Type: application/json' -d '{\"ports\": ${json_ports}}'; elif command -v python3 >/dev/null; then ${remote_py}; else echo 'COMPY_PROBE_MISSING=1' >&2; exit 3; fi"
-    local result
-    if ! result="$(compy_ssh "$probe_cmd")"; then
-        ynh_die --message="Could not run the public port probe from the VPS. Install curl or python3 on the VPS, or check SSH/sudo. You can also run: yunohost diagnosis run web --force after pointing DNS at the VPS (the web diagnoser looks up the domain name, unlike the ports diagnoser)."
+    local result rc=0
+    result="$(compy_ssh "$probe_cmd")" || rc=$?
+    if [[ $rc -eq 124 ]]; then
+        ynh_die --message="The public port probe on the VPS timed out. See Tools > Logs for details. If a log entry stays open, run: sudo systemctl restart yunohost-api"
+    elif [[ $rc -ne 0 ]]; then
+        ynh_die --message="Could not run the public port probe from the VPS. Install curl or python3 on the VPS, or check SSH/sudo. See Tools > Logs for details. You can also run: yunohost diagnosis run web --force after pointing DNS at the VPS (the web diagnoser looks up the domain name, unlike the ports diagnoser)."
     fi
     ynh_print_info "Raw probe result: $result"
     python3 -c '
@@ -1040,7 +1106,7 @@ if bad:
     if [[ -n "$seen" ]]; then
         ynh_print_info "This box's public IPv4 (https://ip.yunohost.org) is currently ${seen}."
     fi
-    ynh_print_info "With the full tunnel up, official 'yunohost diagnosis run ports' and 'yunohost diagnosis run web --force' from this box should see the VPS IP. nohost.me DynDNS auto-detects that address. For a custom domain, point the A record at the VPS (no AAAA)."
+    ynh_print_info "With the full tunnel up, official 'yunohost diagnosis run ports' and 'yunohost diagnosis run web --force' from this box should see the VPS IP (this button does not start those itself). nohost.me DynDNS auto-detects that address. For a custom domain, point the A record at the VPS (no AAAA)."
 }
 
 # Optional validators (echo a message to fail; echo nothing to pass).
@@ -1114,26 +1180,26 @@ for tok in raw.replace(";", ",").split(","):
 
 run__compy_tunnel_off() {
     _compy_paths
-    ynh_print_info "Stopping the Compy tunnel. IPv4 internet will use the home WAN again. LAN access is unchanged. The VPS is left running; public access through it will stop until you start the tunnel again."
+    ynh_print_info "Stopping The Gate tunnel. IPv4 internet will use the home WAN again. LAN access is unchanged. The VPS is left running; public access through it will stop until you start the tunnel again."
     compy_disable_watchdog
     compy_stop_tunnel
     systemctl disable --quiet "wireguard_client@${COMPY_IF}.service" 2>/dev/null || true
     ynh_app_setting_set --key="${COMPY_IF}_atboot" --value=0
     _compy_set compy_last_result "tunnel stopped by emergency off"
-    ynh_print_info "Tunnel stopped. Use Start the tunnel when you want to go back through the VPS (that step is verified and rolled back on failure)."
+    ynh_print_info "The Gate tunnel is stopped. Use Start the tunnel when you want to go back through the VPS (that step is verified and rolled back on failure)."
 }
 
 run__compy_tunnel_on() {
     _compy_paths
-    [[ -f "$COMPY_CONF" ]] || ynh_die --message="There is no saved Compy tunnel config yet. Run Connect and set up the VPS first."
+    [[ -f "$COMPY_CONF" ]] || ynh_die --message="The Gate tunnel has no saved config yet. Run Connect and set up the VPS first."
     local server_ip public_ip
     server_ip="$(_compy_setting compy_server_ip || true)"
     public_ip="$(_compy_setting compy_public_ip || true)"
     [[ -n "$server_ip" ]] || ynh_die --message="The VPS tunnel address is not stored yet. Run Connect and set up the VPS first."
-    ynh_print_info "Starting the Compy tunnel and verifying that this box's public IPv4 becomes the VPS address."
+    ynh_print_info "Starting The Gate tunnel and verifying that your Compy's public IPv4 becomes the VPS address."
     if ! compy_start_and_verify "$server_ip" "$public_ip"; then
-        ynh_die --message="Full-tunnel verification failed and the change was rolled back (this box should be using the home internet path again; LAN was not moved). ${COMPY_VERIFY_FAIL_REASON:-unknown reason}"
+        ynh_die --message="Full-tunnel verification failed and the change was rolled back (your Compy should be using the home internet path again; LAN was not moved). ${COMPY_VERIFY_FAIL_REASON:-unknown reason} See Tools > Logs for details."
     fi
     _compy_set compy_last_result "ok: tunnel started, public IP $(_compy_setting compy_public_ip || true)"
-    ynh_print_info "Tunnel is up and verified."
+    ynh_print_info "The Gate tunnel is up and verified."
 }

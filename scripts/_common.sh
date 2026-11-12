@@ -17,7 +17,7 @@ compy_pkg_dir() {
     printf '%s' "${YNH_APP_BASEDIR:-$_WIREGUARD_CLIENT_PKG_DIR}"
 }
 
-# Initialize Compy panel settings once (install, or first upgrade from upstream).
+# Initialize The Gate panel settings once (install, or first upgrade from upstream).
 # Empty strings are valid values for host/ports/last_result, so a sentinel is used.
 compy_init_settings() {
     if [[ "$(ynh_app_setting_get --key=compy_initialized 2>/dev/null || true)" == "1" ]]; then
@@ -36,7 +36,7 @@ compy_init_settings() {
     ynh_app_setting_set --key=compy_initialized --value="1"
 }
 
-# Fill keys added after the first Compy release, without overwriting values.
+# Fill keys added after the first release of this fork, without overwriting values.
 compy_ensure_settings() {
     compy_init_settings
     if [[ -z "$(ynh_app_setting_get --key=compy_bypass_nets 2>/dev/null || true)" ]]; then
@@ -100,7 +100,7 @@ compy_regen_config_panel() {
     # shellcheck disable=SC2086
     for i in ${interfaces_list}; do
         i="${i//[$'\t\r\n ']/}"
-        # The Compy tunnel is managed by the Public access page, not an upload widget.
+        # The Gate tunnel (interface name compy) is managed by The Gate page, not an upload widget.
         [[ -n "$i" && "$i" != "compy" ]] || continue
         ynh_config_add --template="config_panel.part.toml" --destination="$TEMP_CONFIGPANEL/config_panel.$i.toml"
         ynh_delete_file_checksum "$TEMP_CONFIGPANEL/config_panel.$i.toml" || true
@@ -130,22 +130,22 @@ integrate_services() {
         systemctl enable --quiet "wireguard_client@$i.service"
         yunohost service add "wireguard_client@$i" --description="WireGuard VPN Client $i" --test_status="wg | grep \"interface: $i\" -q"
         atboot="$(ynh_app_setting_get --key="${i}_atboot" || true)"
-        # The Compy tunnel should come back after restore even if atboot was never set.
+        # The Gate tunnel should come back after restore even if atboot was never set.
         if [[ "$i" == "compy" ]]; then
             atboot="${atboot:-1}"
         fi
         if [[ "${atboot:-0}" -eq 1 ]]; then
             if [[ "$i" == "compy" ]] && grep -q '^AllowedIPs *= *0\.0\.0\.0/0' "$file"; then
-                ynh_print_info "Starting the Compy full tunnel with verify-then-commit (rolls back if the VPS is not reachable)..."
+                ynh_print_info "Starting The Gate full tunnel with verify-then-commit (rolls back if the VPS is not reachable)..."
                 local server_ip public_ip
                 server_ip="$(ynh_app_setting_get --key=compy_server_ip || true)"
                 public_ip="$(ynh_app_setting_get --key=compy_public_ip || true)"
                 if [[ -n "$server_ip" ]]; then
                     if ! compy_start_and_verify "$server_ip" "$public_ip"; then
-                        ynh_print_err "Compy full tunnel was not started: verification failed and the change was rolled back."
+                        ynh_print_err "The Gate full tunnel was not started: verification failed and the change was rolled back."
                     fi
                 else
-                    ynh_print_err "Not auto-starting the Compy full tunnel (missing saved VPS tunnel address). Use the Public access panel."
+                    ynh_print_err "Not auto-starting The Gate full tunnel (missing saved VPS tunnel address). Use The Gate page in the configuration panel."
                 fi
             else
                 ynh_print_info "$i interface was also enabled at boot, let's start it..."

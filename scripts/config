@@ -55,8 +55,8 @@ EOF
     fi
 }
 
-# Compy getters / validators / run__* actions are defined in scripts/_compy.sh
-# (sourced from _common.sh).
+# The Gate getters / validators / run__* actions are defined in scripts/_compy.sh
+# (sourced from _common.sh). Option ids stay run__compy_* so a live install upgrades in place.
 
 #=================================================
 # SPECIFIC VALIDATORS FOR TOML SHORT KEYS
@@ -120,12 +120,12 @@ ynh_app_config_apply() {
         [[ $found -eq 0 ]] && removed_interfaces_array+=("$o")
     done
 
-    # The Compy tunnel is managed by the Public access page. Do not create
-    # an upload widget for it, and never delete compy.conf from this list.
+    # The Gate tunnel (interface name compy) is managed by The Gate page.
+    # Do not create an upload widget for it, and never delete compy.conf from this list.
     local -a _filtered=()
     for i in "${added_interfaces_array[@]+"${added_interfaces_array[@]}"}"; do
         if [[ "$i" == "compy" ]]; then
-            ynh_print_err "The 'compy' interface is managed by the Public access page and was not added under Advanced interfaces."
+            ynh_print_err "The 'compy' interface is The Gate tunnel, managed by The Gate page, and was not added under Advanced interfaces."
             continue
         fi
         _filtered+=("$i")
@@ -134,7 +134,7 @@ ynh_app_config_apply() {
     _filtered=()
     for i in "${removed_interfaces_array[@]+"${removed_interfaces_array[@]}"}"; do
         if [[ "$i" == "compy" ]]; then
-            ynh_print_err "Refusing to remove the 'compy' interface from Advanced interfaces; it is managed by the Public access page."
+            ynh_print_err "Refusing to remove the 'compy' interface from Advanced interfaces; it is The Gate tunnel, managed by The Gate page."
             continue
         fi
         _filtered+=("$i")
@@ -160,7 +160,7 @@ ynh_app_config_apply() {
         ynh_app_setting_set --key="$i_conf" --value=""
     done
 
-    # Generate the new config panel from the template (includes [compy])
+    # Generate the new config panel from the template (includes The Gate page)
     # plus one part per Advanced interface.
     compy_regen_config_panel
 
@@ -183,7 +183,7 @@ ynh_app_config_apply() {
 
     for i in "${old_interfaces_array[@]+"${old_interfaces_array[@]}"}"
     do
-    # Skip the Compy tunnel; its conf is written by the Public access actions.
+    # Skip The Gate tunnel; its conf is written by The Gate page actions.
     [[ "$i" == "compy" ]] && continue
 
     i_atboot="${i}_atboot"
