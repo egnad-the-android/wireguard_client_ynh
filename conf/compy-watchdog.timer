@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the Compy WireGuard tunnel watchdog every minute
+Description=Run The Gate tunnel watchdog every minute
 
 [Timer]
 OnBootSec=2min

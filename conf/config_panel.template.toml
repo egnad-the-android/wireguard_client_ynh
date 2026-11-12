@@ -1,32 +1,35 @@
-# Config panel for wireguard_client (Compy fork).
+# Config panel for The Gate (fork of wireguard_client_ynh).
 # Keep this file and conf/config_panel.template.toml in sync: the live panel
 # is regenerated from the template (plus conf/config_panel.part.toml for any
 # extra Advanced interfaces). Short keys must stay unique. Avoid reserved ids
 # (including `port`). type = "button" is forced to bind = "null"; handlers
-# are run__<id> in scripts/config.
+# are run__<id> in scripts/config. Option ids and the interface name `compy`
+# are kept so a live install upgrades in place.
 
 version = "1.0"
 
 # =====================================================================
-# Panel 1: Public access (Compy) — the grandma-friendly single page
+# Panel 1: The Gate — the grandma-friendly single page
 # =====================================================================
 [compy]
-name = "Public access (Compy)"
+name = "The Gate"
 
     [compy.intro]
     name = "How this works"
 
         [compy.intro.compy_intro]
-        ask = """This page turns a cheap Debian VPS (for example an OVH VPS) into a public doorway for this YunoHost server, without opening any port on your home internet box.
+        ask = """This page sets up The Gate: a cheap Debian VPS (for example an OVH VPS) that gives your Compy (this YunoHost server) a public IP, without opening any port on your home internet box.
 
 After setup, ALL IPv4 internet traffic from this server goes through the VPS, except local networks (your LAN, RFC1918, and Starlink CGNAT). YunoHost will then see the VPS public IP, so diagnosis, Let's Encrypt, nohost.me DynDNS, and outbound mail all use that address. LAN access and LAN SSH stay on the home network.
 
 1. Copy the SSH public key below and add it in the OVH (or other) panel for the VPS, as an authorized key for the SSH user (often `debian` on OVH Debian images; root login may be disabled).
 2. Enter the VPS IP address, SSH user and SSH port. Click Test connection, compare the fingerprint with the one in the OVH console, then click Pin host key.
 3. Review the port list (pre-filled from this server's YunoHost firewall) and the list of networks that stay outside the tunnel. SSH on the VPS is never forwarded.
-4. Click Connect and set up the VPS. This server will generate a WireGuard key, install WireGuard on the VPS over SSH, start a full-tunnel, and keep all HTTPS certificates on this YunoHost box. If the tunnel cannot be verified, the change is rolled back automatically.
+4. Click Connect and set up the VPS. This server will generate a WireGuard® key, install WireGuard® on the VPS over SSH, start a full-tunnel, and keep all HTTPS certificates on your Compy. If the tunnel cannot be verified, the change is rolled back automatically.
 
-The VPS is a single point of failure: if it goes down, this box loses internet until the watchdog (about 3 minutes) takes the tunnel down, or you click Turn tunnel off. All bandwidth then counts through the VPS (OVH US standard region is typically unmetered 500 Mbps). IPv6 internet is disabled while the tunnel is up (no AAAA records in this version)."""
+The VPS is a single point of failure: if it goes down, your Compy loses internet until the watchdog (about 3 minutes) takes the tunnel down, or you click Turn tunnel off. All bandwidth then counts through the VPS (OVH US standard region is typically unmetered 500 Mbps). IPv6 internet is disabled while the tunnel is up (no AAAA records in this version).
+
+If a button fails, the panel may only show "Failed to run action". The details are in Tools > Logs (or `yunohost log show`). If a log entry stays open and later admin tasks appear under it, run `sudo systemctl restart yunohost-api`."""
         type = "alert"
         style = "info"
         bind = "null"
@@ -46,7 +49,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         ask = "Regenerate the SSH key"
         style = "danger"
         icon = "refresh"
-        help = "Only use this if the current key was leaked or lost. You will have to replace the key on the VPS afterwards."
+        help = "Only use this if the current key was leaked or lost. You will have to replace the key on the VPS afterwards. If this fails, the panel may only show 'Failed to run action'; details are in Tools > Logs."
 
     [compy.vps]
     name = "Step 2 — VPS address (click Save at the bottom of the page)"
@@ -54,7 +57,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         [compy.vps.compy_vps_host]
         ask = "VPS IP address or hostname"
         type = "string"
-        help = "Prefer the IPv4 address. This value also becomes the WireGuard Endpoint host."
+        help = "Prefer the IPv4 address. This value also becomes the WireGuard® Endpoint host."
         optional = false
 
         [compy.vps.compy_ssh_user]
@@ -70,7 +73,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         default = 22
         min = 1
         max = 65535
-        help = "This port is kept open on the VPS and is never forwarded to this home server."
+        help = "This port is kept open on the VPS and is never forwarded to your Compy."
 
     [compy.vpscheck]
     name = "Step 2b — Check the VPS connection (Save the address above first)"
@@ -86,7 +89,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         ask = "Test connection"
         style = "info"
         icon = "plug"
-        help = "Fetches the VPS SSH fingerprint (ssh-keyscan) and, if the host is already pinned, tries a non-interactive login and sudo."
+        help = "Fetches the VPS SSH fingerprint (ssh-keyscan) and, if the host is already pinned, tries a non-interactive login and sudo. If this fails, the panel may only show 'Failed to run action'; details are in Tools > Logs."
 
         [compy.vpscheck.compy_pin_host]
         type = "button"
@@ -109,7 +112,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         ask = "WireGuard tunnel subnet"
         type = "string"
         default = "10.99.0.0/24"
-        help = "The VPS will be the first host (10.99.0.1) and this server the second (10.99.0.2). Choose a subnet that does not overlap your home LAN. Prefix must be between /16 and /30."
+        help = "The VPS will be the first host (10.99.0.1) and your Compy the second (10.99.0.2). Choose a subnet that does not overlap your home LAN. Prefix must be between /16 and /30."
         pattern.regexp = '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$'
         pattern.error = "Use a CIDR like 10.99.0.0/24"
 
@@ -128,7 +131,7 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         [compy.tunnel.compy_bypass_nets]
         ask = "Networks that stay outside the tunnel"
         type = "text"
-        help = """Comma-separated IPv4 CIDRs that must not go through the VPS. The default is auto-detected connected subnets plus 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, and 100.64.0.0/10 (CGNAT, including typical Starlink WAN). The WireGuard endpoint is always pinned on the home WAN automatically. Edit, then Save, before you set up or start the tunnel. Do not add 0.0.0.0/0."""
+        help = """Comma-separated IPv4 CIDRs that must not go through the VPS. The default is auto-detected connected subnets plus 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, and 100.64.0.0/10 (CGNAT, including typical Starlink WAN). The WireGuard® endpoint is always pinned on the home WAN automatically. Edit, then Save, before you set up or start the tunnel. Do not add 0.0.0.0/0."""
         # default is filled by the getter when the saved setting is empty
 
     [compy.portsbtn]
@@ -148,24 +151,24 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         ask = "Connect and set up the VPS"
         style = "success"
         icon = "rocket"
-        help = "Requires a pinned host key. Generates the local WireGuard key if needed, runs the setup script on the VPS over SSH, writes a full-tunnel client config, brings it up, and keeps it only if handshake, tunnel ping, and https://ip.yunohost.org (VPS public IP) all succeed. Otherwise the change is rolled back."
+        help = "Requires a pinned host key. Generates the local WireGuard® key if needed, runs the setup script on the VPS over SSH, writes a full-tunnel client config, brings it up, and keeps it only if handshake, tunnel ping, and https://ip.yunohost.org (VPS public IP) all succeed. Otherwise the change is rolled back. If this fails, the panel may only show 'Failed to run action'; details are in Tools > Logs."
 
         [compy.actions.compy_resync_ports]
         type = "button"
-        ask = "Re-sync ports (v1.1)"
+        ask = "Re-sync ports"
         style = "info"
         icon = "exchange"
-        help = "Re-runs the VPS script with the current port list (idempotent). The tunnel itself is not rebuilt unless the peer key or subnet changed."
+        help = "Re-runs the VPS script with the current port list (idempotent). The tunnel itself is not rebuilt unless the peer key or subnet changed. Also applies firewall updates such as allowing a ping to the tunnel gateway. If this fails, the panel may only show 'Failed to run action'; details are in Tools > Logs."
 
         [compy.actions.compy_test_ports]
         type = "button"
         ask = "Test public ports"
         style = "info"
         icon = "stethoscope"
-        help = "Pings the tunnel, shows this box's public IPv4 (https://ip.yunohost.org, which should be the VPS), and asks the YunoHost diagnosis service to probe the forwarded TCP ports. With the full tunnel up, official `yunohost diagnosis run ports` from this box should also see the VPS IP."
+        help = "Pings the tunnel, shows this box's public IPv4 (https://ip.yunohost.org, which should be the VPS), and asks the YunoHost diagnosis service (from the VPS) to probe the forwarded TCP ports. This does not run `yunohost diagnosis run`. The probe is time-limited so it cannot leave a log entry open. If it fails, the panel may only show 'Failed to run action'; details are in Tools > Logs."
 
         [compy.actions.compy_status]
-        ask = "The tunnel has not been set up yet."
+        ask = "The Gate tunnel has not been set up yet."
         type = "alert"
         style = "info"
         bind = "null"
@@ -175,25 +178,25 @@ The VPS is a single point of failure: if it goes down, this box loses internet u
         ask = "Turn tunnel off (emergency)"
         style = "danger"
         icon = "power-off"
-        help = "Stops the Compy tunnel immediately so IPv4 internet uses the home WAN again. LAN and LAN SSH stay reachable. The VPS is left as-is. Use this if you lose connectivity or the VPS is down (the watchdog also does this after about 3 minutes without a handshake)."
+        help = "Stops The Gate tunnel immediately so IPv4 internet uses the home WAN again. LAN and LAN SSH stay reachable. The VPS is left as-is. Use this if you lose connectivity or the VPS is down (the watchdog also does this after about 3 minutes without a handshake)."
 
         [compy.actions.compy_tunnel_on]
         type = "button"
         ask = "Start the tunnel"
         style = "success"
         icon = "play"
-        help = "Brings the saved full-tunnel config up and keeps it only if verification succeeds (handshake, tunnel ping, and ip.yunohost.org seeing the VPS IP)."
+        help = "Brings the saved full-tunnel config up and keeps it only if verification succeeds (handshake, tunnel ping, and ip.yunohost.org seeing the VPS IP). If this fails, the panel may only show 'Failed to run action'; details are in Tools > Logs."
 
         [compy.actions.compy_dns_hint]
-        ask = """After the tunnel is up, YunoHost sees the VPS public IPv4. A nohost.me (or other YunoHost DynDNS) domain will auto-update to that address via ip.yunohost.org — you do not need `yunohost dyndns update --ipv4` or to remove a cron job. For a custom domain, point the A record at the VPS IPv4 and wait for it to propagate. Do not publish an AAAA record in this version (IPv6 internet is disabled while the tunnel is up; set YunoHost DNS exposure to IPv4 only). Set a PTR/rDNS record for the VPS IPv4 in the OVH (or other) panel so outbound mail from this box is accepted. If the VPS dies, this box loses internet until the watchdog takes the tunnel down or you click Turn tunnel off; all bandwidth counts through the VPS."""
+        ask = """After the tunnel is up, YunoHost sees the VPS public IPv4. A nohost.me (or other YunoHost DynDNS) domain will auto-update to that address via ip.yunohost.org — you do not need `yunohost dyndns update --ipv4` or to remove a cron job. For a custom domain, point the A record at the VPS IPv4 and wait for it to propagate. Do not publish an AAAA record in this version (IPv6 internet is disabled while the tunnel is up; set YunoHost DNS exposure to IPv4 only). Set a PTR/rDNS record for the VPS IPv4 in the OVH (or other) panel so outbound mail from your Compy is accepted. If the VPS dies, your Compy loses internet until the watchdog takes the tunnel down or you click Turn tunnel off; all bandwidth counts through the VPS."""
         type = "alert"
         style = "warning"
         bind = "null"
 
 # =====================================================================
-# Panel 2: existing WireGuard Client interfaces (advanced / legacy)
-# The Compy tunnel (interface name `compy`) is managed by the Public
-# access page above; do not upload a file for it here.
+# Panel 2: existing WireGuard® client interfaces (advanced / legacy)
+# The Gate tunnel (interface name `compy`) is managed by The Gate page
+# above; do not upload a file for it here.
 # =====================================================================
 [main]
 name = "Advanced interfaces"
@@ -212,12 +215,12 @@ name = "Advanced interfaces"
         [main.interfaces.interfaces]
         ask = "List of VPN clients to handle"
         type = "tags"
-        help = "Adding or removing names here will create or delete configuration files and network interfaces upon next Save (only alphanumerical characters and `_` are allowed). The Compy public-access tunnel is managed on the Public access page and should not be added here."
+        help = "Adding or removing names here will create or delete configuration files and network interfaces upon next Save (only alphanumerical characters and `_` are allowed). The Gate tunnel (interface name `compy`) is managed on The Gate page and should not be added here."
         pattern.regexp = '^[\w.]+'
         pattern.error = "Only alphanumerical characters and `_` are allowed"
 
         [main.interfaces.alert]
         ask = """Be wary about the configuration files you upload here.
-They may contain PostUp and PostDown instructions; these will be run as `root` by WireGuard, with no safeguards."""
+They may contain PostUp and PostDown instructions; these will be run as `root` by WireGuard®, with no safeguards."""
         type = "alert"
         style = "warning"
