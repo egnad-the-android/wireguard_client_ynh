@@ -1,3 +1,73 @@
+# The Gate (fork of wireguard_client_ynh 1.0.20210914~ynh1, commit 51a1f342).
+
+================================================================================
+1.0.20210914+gate1~ynh1  (compy8, rebranded as The Gate)
+================================================================================
+
+User-facing name is now "The Gate", the gateway to your Compy. The app id
+(wireguard_client), the tunnel interface name (compy), setting keys, and
+install paths are unchanged so a live install upgrades in place.
+
+LICENSE
+    Kept the original "Copyright (c) 2022+ YunoHost contributors" line; added
+    "Copyright (c) 2026 Egnad the Android and contributors (The Gate fork)".
+
+README.md
+    Rewritten as a fork README (no YunoHost or WireGuard logos). States that
+    this is a fork of YunoHost-Apps/wireguard_client_ynh, not affiliated with
+    or endorsed by YunoHost or WireGuard. WireGuard® is used only
+    descriptively, with a trademark note (registered trademark of
+    Jason A. Donenfeld). Documents The Gate user flow and this version's fixes.
+
+manifest.toml
+    name = "The Gate"; version = 1.0.20210914+gate1~ynh1; descriptions updated;
+    maintainers lists tituspijean (upstream) and egnad-the-android. App id
+    unchanged.
+
+config_panel.toml and conf/config_panel.template.toml
+    Panel title is "The Gate". Labels and help text rebranded (home server is
+    "your Compy"). Help notes that a failed action's details are in
+    Tools > Logs, and that `sudo systemctl restart yunohost-api` clears a
+    stuck log. "Re-sync ports (v1.1)" is now "Re-sync ports". Test public
+    ports help no longer implies that the button runs `yunohost diagnosis run`.
+
+conf/vps_setup.sh
+    ICMP echo-request is now allowed explicitly on the WireGuard interface
+    (so ping to 10.99.0.1 works), as well as on the public interface.
+    Re-running the script (Re-sync ports, or setup) rewrites the nftables
+    table, so the rule is applied idempotently. Removed the
+    `exec 2> >(tee ...)` process substitution, which could leave a child
+    process and keep the SSH session (and a YunoHost action log) open.
+
+scripts/_compy.sh
+    Every ssh / ssh-keyscan call has ConnectTimeout, ServerAliveInterval /
+    ServerAliveCountMax, BatchMode=yes, RequestTTY=no. Probes use ssh -n
+    and </dev/null, and are wrapped in `timeout` (about 90s for probes,
+    600s for VPS setup). compy_ssh runs the remote command under
+    `sudo -n bash -c` so shell constructs (the port probe) work and do not
+    hang on stdin. Status no longer prints "Interface state: unknown"
+    (operstate is normally unknown for WireGuard); it reports up/down from
+    ip link flags and the handshake. Failure paths use ynh_die / ynh_print_err
+    with a plain message pointing at Tools > Logs. Duplicate comment and
+    stale wording cleaned up. User-facing messages say The Gate.
+
+scripts/_common.sh, config, install, upgrade, remove, compy_watchdog.sh
+    User-facing messages and systemd unit descriptions say The Gate.
+    Upgrade reminds the admin to click Re-sync ports so the VPS applies
+    the ICMP rule.
+
+doc/*
+    Rebranded; "untested" notes removed (this fork has been used on a real
+    YunoHost server and a US OVH VPS).
+
+After upgrading a live install: the tunnel config is not rewritten. Open
+The Gate page and click Re-sync ports to apply the VPS ICMP rule. If an
+old action log is stuck, run: sudo systemctl restart yunohost-api.
+
+================================================================================
+Historical: files changed or added in the earlier Compy Level 2 fork
+================================================================================
+
 # Files changed or added in this Compy Level 2 fork, relative to wireguard_client_ynh 1.0.20210914~ynh1 (commit 51a1f342).
 
 CHANGES.txt
